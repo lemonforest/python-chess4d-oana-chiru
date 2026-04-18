@@ -61,6 +61,7 @@ class _GameStateUndo:
     prior_ep_target: Optional[Square4D]
     prior_ep_victim: Optional[Square4D]
     prior_ep_axis: Optional[PawnAxis]
+    prior_halfmove_clock: int
     is_castling_compound: bool
     ep_capture_restore: Optional[tuple[Square4D, Piece]]
 
@@ -173,6 +174,7 @@ class GameState:
     ep_target: Optional[Square4D] = None
     ep_victim: Optional[Square4D] = None
     ep_axis: Optional[PawnAxis] = None
+    halfmove_clock: int = 0
     _undo: list[_GameStateUndo] = field(default_factory=list, repr=False)
 
     __hash__ = None  # type: ignore[assignment]
@@ -217,12 +219,14 @@ class GameState:
                 "(§3.4 Def 3, Remark 1)."
             )
         new_ep_target, new_ep_victim, new_ep_axis = _compute_new_ep_state(piece, move)
+        resets_clock = piece.piece_type is PieceType.PAWN or captured is not None
         self._undo.append(
             _GameStateUndo(
                 prior_castling_rights=self.castling_rights,
                 prior_ep_target=self.ep_target,
                 prior_ep_victim=self.ep_victim,
                 prior_ep_axis=self.ep_axis,
+                prior_halfmove_clock=self.halfmove_clock,
                 is_castling_compound=False,
                 ep_capture_restore=None,
             )
@@ -233,6 +237,7 @@ class GameState:
         self.ep_target = new_ep_target
         self.ep_victim = new_ep_victim
         self.ep_axis = new_ep_axis
+        self.halfmove_clock = 0 if resets_clock else self.halfmove_clock + 1
         self.side_to_move = Color(1 - self.side_to_move)
 
     def _push_castling(self, move: Move4D, king: Piece) -> None:
@@ -346,6 +351,7 @@ class GameState:
                 prior_ep_target=self.ep_target,
                 prior_ep_victim=self.ep_victim,
                 prior_ep_axis=self.ep_axis,
+                prior_halfmove_clock=self.halfmove_clock,
                 is_castling_compound=True,
                 ep_capture_restore=None,
             )
@@ -357,6 +363,8 @@ class GameState:
         self.ep_target = None
         self.ep_victim = None
         self.ep_axis = None
+        # Castling is neither a pawn move nor a capture — clock ticks.
+        self.halfmove_clock += 1
         self.side_to_move = Color(1 - self.side_to_move)
 
     def _push_en_passant(self, move: Move4D, pawn: Piece) -> None:
@@ -432,6 +440,7 @@ class GameState:
                 prior_ep_target=self.ep_target,
                 prior_ep_victim=self.ep_victim,
                 prior_ep_axis=self.ep_axis,
+                prior_halfmove_clock=self.halfmove_clock,
                 is_castling_compound=False,
                 ep_capture_restore=(v, victim_piece),
             )
@@ -439,6 +448,8 @@ class GameState:
         self.ep_target = None
         self.ep_victim = None
         self.ep_axis = None
+        # Pawn move AND capture — either alone would reset the clock.
+        self.halfmove_clock = 0
         self.side_to_move = Color(1 - self.side_to_move)
 
     def pop(self) -> Move4D:
@@ -463,6 +474,7 @@ class GameState:
         self.ep_target = undo_entry.prior_ep_target
         self.ep_victim = undo_entry.prior_ep_victim
         self.ep_axis = undo_entry.prior_ep_axis
+        self.halfmove_clock = undo_entry.prior_halfmove_clock
         self.side_to_move = Color(1 - self.side_to_move)
         return move
 
@@ -567,3 +579,14 @@ class GameState:
         Paper §3.4 Def 5 (stalemate branch).
         """
         return not self.in_check() and not any(self.legal_moves())
+
+    def is_fifty_move_draw(self) -> bool:
+        """Return ``True`` iff the halfmove clock has reached 100 plies.
+
+        FIDE's claim-at-50 interpretation: after 50 full moves (100
+        plies) with no pawn move and no capture, either side may claim
+        a draw. This predicate does not enforce the claim — callers
+        decide whether to honor it. The paper inherits the FIDE
+        halfmove-clock rule by reference.
+        """
+        return self.halfmove_clock >= 100
