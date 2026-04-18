@@ -34,6 +34,7 @@ from chess4d.types import (
     CastlingRight,
     Color,
     Move4D,
+    PawnAxis,
     Piece,
     PieceType,
     Square4D,
@@ -48,10 +49,20 @@ class _GameStateUndo:
     :attr:`Board4D._undo` for non-castling moves; for castling,
     ``is_castling_compound`` is True and two board-level entries pair
     with this one game-level entry.
+
+    ``ep_capture_restore`` is non-None only for en-passant captures:
+    it carries the ``(square, piece)`` pair to re-place on
+    :meth:`GameState.pop`, since the captured pawn sat at a different
+    square than ``move.to_sq`` and the board-level undo only knows
+    about ``move.to_sq``.
     """
 
     prior_castling_rights: frozenset[CastlingRight]
+    prior_ep_target: Optional[Square4D]
+    prior_ep_victim: Optional[Square4D]
+    prior_ep_axis: Optional[PawnAxis]
     is_castling_compound: bool
+    ep_capture_restore: Optional[tuple[Square4D, Piece]]
 
 
 def _rook_home_right(color: Color, sq: Square4D) -> Optional[CastlingRight]:
@@ -71,6 +82,33 @@ def _rook_home_right(color: Color, sq: Square4D) -> Optional[CastlingRight]:
     if sq.x == BOARD_SIZE - 1:
         return (color, sq.z, sq.w, CastleSide.KINGSIDE)
     return None
+
+
+def _compute_new_ep_state(
+    mover: Piece, move: Move4D
+) -> tuple[Optional[Square4D], Optional[Square4D], Optional[PawnAxis]]:
+    """If ``move`` is a pawn two-step, return ``(ep_target, ep_victim, ep_axis)``.
+
+    Otherwise returns ``(None, None, None)``. The *target* is the
+    skipped square (where the capturing pawn lands on en passant);
+    the *victim* is the pawn's actual destination (where it now sits
+    and where ep capture removes it from). ``ep_axis`` distinguishes
+    Y- from W-oriented two-steps, enforcing the paper's no-mixed-
+    direction rule (§3.10 Def 15 final sentence).
+    """
+    if mover.piece_type is not PieceType.PAWN:
+        return (None, None, None)
+    axis = mover.pawn_axis
+    assert axis is not None  # guaranteed by Piece.__post_init__
+    axis_idx = int(axis)
+    delta = move.to_sq[axis_idx] - move.from_sq[axis_idx]
+    if abs(delta) != 2:
+        return (None, None, None)
+    step = delta // 2  # ±1
+    skip_coords = list(move.from_sq)
+    skip_coords[axis_idx] = move.from_sq[axis_idx] + step
+    ep_target = Square4D(skip_coords[0], skip_coords[1], skip_coords[2], skip_coords[3])
+    return (ep_target, move.to_sq, axis)
 
 
 def _revoke_rights_for_move(
@@ -132,6 +170,9 @@ class GameState:
     board: Board4D
     side_to_move: Color
     castling_rights: frozenset[CastlingRight] = frozenset()
+    ep_target: Optional[Square4D] = None
+    ep_victim: Optional[Square4D] = None
+    ep_axis: Optional[PawnAxis] = None
     _undo: list[_GameStateUndo] = field(default_factory=list, repr=False)
 
     __hash__ = None  # type: ignore[assignment]
@@ -164,6 +205,9 @@ class GameState:
         if move.is_castling:
             self._push_castling(move, piece)
             return
+        if move.is_en_passant:
+            self._push_en_passant(move, piece)
+            return
         captured = self.board.occupant(move.to_sq)
         self.board.push(move)
         if any_king_attacked(self.side_to_move, self.board):
@@ -172,15 +216,23 @@ class GameState:
                 f"Move {move} leaves a {self.side_to_move.name} king in check "
                 "(§3.4 Def 3, Remark 1)."
             )
+        new_ep_target, new_ep_victim, new_ep_axis = _compute_new_ep_state(piece, move)
         self._undo.append(
             _GameStateUndo(
                 prior_castling_rights=self.castling_rights,
+                prior_ep_target=self.ep_target,
+                prior_ep_victim=self.ep_victim,
+                prior_ep_axis=self.ep_axis,
                 is_castling_compound=False,
+                ep_capture_restore=None,
             )
         )
         self.castling_rights = _revoke_rights_for_move(
             self.castling_rights, move, piece, captured
         )
+        self.ep_target = new_ep_target
+        self.ep_victim = new_ep_victim
+        self.ep_axis = new_ep_axis
         self.side_to_move = Color(1 - self.side_to_move)
 
     def _push_castling(self, move: Move4D, king: Piece) -> None:
@@ -291,13 +343,102 @@ class GameState:
         self._undo.append(
             _GameStateUndo(
                 prior_castling_rights=self.castling_rights,
+                prior_ep_target=self.ep_target,
+                prior_ep_victim=self.ep_victim,
+                prior_ep_axis=self.ep_axis,
                 is_castling_compound=True,
+                ep_capture_restore=None,
             )
         )
         # Revoke both rights on this (color, z, w) slice.
         self.castling_rights = frozenset(
             r for r in self.castling_rights if r[:3] != (king.color, z, w)
         )
+        self.ep_target = None
+        self.ep_victim = None
+        self.ep_axis = None
+        self.side_to_move = Color(1 - self.side_to_move)
+
+    def _push_en_passant(self, move: Move4D, pawn: Piece) -> None:
+        """Validate and apply an en-passant capture (paper §3.10 Def 15).
+
+        Preconditions:
+
+        1. An en-passant target is set (``self.ep_target is not None``).
+        2. ``move.to_sq == self.ep_target``.
+        3. The moving piece is a pawn whose ``pawn_axis`` equals
+           ``self.ep_axis`` — the no-mixed-direction rule.
+        4. The capturer sits on the victim's row with ``|Δx| == 1`` and
+           otherwise shares ``(y, z, w)`` with the victim, matching the
+           paper's definition of an adjacent-x-file ep capture.
+        5. After the compound mutation (capturer → to_sq, victim removed),
+           no friendly king is attacked.
+
+        On any failure the board and game-level state are left
+        unchanged. On success, the new ep state is cleared — an ep
+        capture is itself not a two-step.
+        """
+        if pawn.piece_type is not PieceType.PAWN:
+            raise IllegalMoveError(
+                f"En-passant move from {move.from_sq} requires a pawn, "
+                f"found {pawn.piece_type.name}."
+            )
+        if self.ep_target is None or self.ep_victim is None or self.ep_axis is None:
+            raise IllegalMoveError(
+                "No en-passant target available (§3.10 Def 15)."
+            )
+        if move.to_sq != self.ep_target:
+            raise IllegalMoveError(
+                f"En-passant capture must land on ep_target {self.ep_target}; "
+                f"got {move.to_sq}."
+            )
+        if pawn.pawn_axis is not self.ep_axis:
+            raise IllegalMoveError(
+                f"Mixed-axis en passant is forbidden: capturer is "
+                f"{pawn.pawn_axis.name if pawn.pawn_axis else None}-oriented "
+                f"but ep_axis is {self.ep_axis.name} (§3.10 Def 15)."
+            )
+        v = self.ep_victim
+        if (
+            abs(move.from_sq.x - v.x) != 1
+            or move.from_sq.y != v.y
+            or move.from_sq.z != v.z
+            or move.from_sq.w != v.w
+        ):
+            raise IllegalMoveError(
+                f"En-passant capturer must be x-adjacent to victim {v}; "
+                f"got {move.from_sq}."
+            )
+        victim_piece = self.board.occupant(v)
+        if victim_piece is None or victim_piece.color == pawn.color:
+            raise IllegalMoveError(
+                f"En-passant victim expected at {v} but square is "
+                f"{'empty' if victim_piece is None else 'friendly'}."
+            )
+        # Apply: remove victim, slide capturer to ep_target via unchecked push.
+        self.board.remove(v)
+        self.board._push_unchecked(move)
+        if any_king_attacked(self.side_to_move, self.board):
+            # Rollback in reverse order.
+            self.board.pop()
+            self.board.place(v, victim_piece)
+            raise IllegalMoveError(
+                f"En-passant move {move} leaves a {self.side_to_move.name} "
+                "king in check (§3.4 Def 3, Remark 1)."
+            )
+        self._undo.append(
+            _GameStateUndo(
+                prior_castling_rights=self.castling_rights,
+                prior_ep_target=self.ep_target,
+                prior_ep_victim=self.ep_victim,
+                prior_ep_axis=self.ep_axis,
+                is_castling_compound=False,
+                ep_capture_restore=(v, victim_piece),
+            )
+        )
+        self.ep_target = None
+        self.ep_victim = None
+        self.ep_axis = None
         self.side_to_move = Color(1 - self.side_to_move)
 
     def pop(self) -> Move4D:
@@ -315,7 +456,13 @@ class GameState:
             move = self.board.pop()  # king move
         else:
             move = self.board.pop()
+        if undo_entry.ep_capture_restore is not None:
+            sq, victim = undo_entry.ep_capture_restore
+            self.board.place(sq, victim)
         self.castling_rights = undo_entry.prior_castling_rights
+        self.ep_target = undo_entry.prior_ep_target
+        self.ep_victim = undo_entry.prior_ep_victim
+        self.ep_axis = undo_entry.prior_ep_axis
         self.side_to_move = Color(1 - self.side_to_move)
         return move
 
@@ -342,6 +489,7 @@ class GameState:
             if safe:
                 yield move
         yield from self._castling_candidates()
+        yield from self._en_passant_candidates()
 
     def _castling_candidates(self) -> Iterator[Move4D]:
         """Yield fully-legal castling moves for ``side_to_move``.
@@ -358,6 +506,39 @@ class GameState:
             to_x = 6 if side is CastleSide.KINGSIDE else 2
             to_sq = Square4D(to_x, back_y, z, w)
             move = Move4D(from_sq, to_sq, is_castling=True)
+            try:
+                self.push(move)
+            except IllegalMoveError:
+                continue
+            self.pop()
+            yield move
+
+    def _en_passant_candidates(self) -> Iterator[Move4D]:
+        """Yield fully-legal en-passant captures for ``side_to_move``.
+
+        Emitted from :class:`GameState` (not :func:`pawn_moves`) so
+        that pseudo-legal generators stay concerned only with moves
+        intrinsic to a pawn's position — transient position-dependent
+        rules live here (§3.10 Def 15).
+        """
+        if self.ep_target is None or self.ep_victim is None or self.ep_axis is None:
+            return
+        v = self.ep_victim
+        for dx in (-1, 1):
+            cap_x = v.x + dx
+            if not 0 <= cap_x < BOARD_SIZE:
+                continue
+            cap_sq = Square4D(cap_x, v.y, v.z, v.w)
+            piece = self.board.occupant(cap_sq)
+            if piece is None:
+                continue
+            if piece.color != self.side_to_move:
+                continue
+            if piece.piece_type is not PieceType.PAWN:
+                continue
+            if piece.pawn_axis is not self.ep_axis:
+                continue
+            move = Move4D(cap_sq, self.ep_target, is_en_passant=True)
             try:
                 self.push(move)
             except IllegalMoveError:
