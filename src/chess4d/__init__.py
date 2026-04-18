@@ -35,6 +35,8 @@ from chess4d.startpos import initial_position
 from chess4d.state import GameState
 from chess4d.types import (
     BOARD_SIZE,
+    CastleSide,
+    CastlingRight,
     Color,
     Move4D,
     PawnAxis,
@@ -46,6 +48,8 @@ from chess4d.types import (
 __all__ = [
     "BOARD_SIZE",
     "Board4D",
+    "CastleSide",
+    "CastlingRight",
     "Color",
     "GameState",
     "IllegalMoveError",

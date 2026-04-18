@@ -27,7 +27,16 @@ from __future__ import annotations
 
 from chess4d.board import Board4D
 from chess4d.state import GameState
-from chess4d.types import BOARD_SIZE, Color, PawnAxis, Piece, PieceType, Square4D
+from chess4d.types import (
+    BOARD_SIZE,
+    CastleSide,
+    CastlingRight,
+    Color,
+    PawnAxis,
+    Piece,
+    PieceType,
+    Square4D,
+)
 
 
 CENTRAL_SLICES: frozenset[tuple[int, int]] = frozenset(
@@ -100,13 +109,32 @@ def _place_color_on_slice(board: Board4D, z: int, w: int, color: Color) -> None:
         )
 
 
+def _initial_castling_rights() -> frozenset[CastlingRight]:
+    """Return the full initial castling-rights set (paper §3.9 Def 10).
+
+    Every populated slice gets both sides of castling for its own
+    color: 28 white slices × 2 sides + 28 black slices × 2 sides = 112
+    rights total. Central slices contribute rights for both colors
+    (they hold both kings).
+    """
+    rights: set[CastlingRight] = set()
+    for z, w in CENTRAL_SLICES | WHITE_ONLY_SLICES:
+        rights.add((Color.WHITE, z, w, CastleSide.KINGSIDE))
+        rights.add((Color.WHITE, z, w, CastleSide.QUEENSIDE))
+    for z, w in CENTRAL_SLICES | BLACK_ONLY_SLICES:
+        rights.add((Color.BLACK, z, w, CastleSide.KINGSIDE))
+        rights.add((Color.BLACK, z, w, CastleSide.QUEENSIDE))
+    return frozenset(rights)
+
+
 def initial_position() -> GameState:
     """Return the Oana-Chiru starting position with white to move.
 
     Populates the board with 896 pieces (448 per color, 28 kings per
     side) across the slice partition defined in :data:`CENTRAL_SLICES`,
     :data:`WHITE_ONLY_SLICES`, :data:`BLACK_ONLY_SLICES`, and
-    :data:`EMPTY_SLICES`.
+    :data:`EMPTY_SLICES`. Also seeds the full 112-entry castling
+    rights set per :func:`_initial_castling_rights`.
     """
     board = Board4D()
     for z, w in WHITE_ONLY_SLICES:
@@ -116,4 +144,8 @@ def initial_position() -> GameState:
     for z, w in CENTRAL_SLICES:
         _place_color_on_slice(board, z, w, Color.WHITE)
         _place_color_on_slice(board, z, w, Color.BLACK)
-    return GameState(board=board, side_to_move=Color.WHITE)
+    return GameState(
+        board=board,
+        side_to_move=Color.WHITE,
+        castling_rights=_initial_castling_rights(),
+    )

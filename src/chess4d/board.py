@@ -175,6 +175,25 @@ class Board4D:
             self._squares[move.to_sq] = captured
         return move
 
+    def _push_unchecked(self, move: Move4D) -> None:
+        """Apply ``move`` without pseudo-legal validation (paper §3.9 Def 10).
+
+        Used by higher-layer callers — currently :class:`GameState`
+        castling — that have already validated the move's geometry
+        through rules :class:`Board4D` does not itself model (the
+        king's 2-square castling jump is not Chebyshev-1 reachable).
+
+        The move is recorded on the normal undo stack so :meth:`pop`
+        handles it identically to a :meth:`push`-pushed move. The
+        ``to_sq`` must be empty — castling's two mutations never
+        overlap with captures — but this is not re-validated; the
+        caller is trusted.
+        """
+        mover = self._squares[move.from_sq]
+        del self._squares[move.from_sq]
+        self._squares[move.to_sq] = mover
+        self._undo.append((move, None, mover))
+
     # --- helpers -------------------------------------------------------------
 
     def _walk_ray_or_raise(

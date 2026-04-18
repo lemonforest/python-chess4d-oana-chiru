@@ -48,6 +48,30 @@ class PieceType(IntEnum):
     KING = 6    # §3.9, Definition 9
 
 
+class CastleSide(IntEnum):
+    """Which side of the king a castling move uses (paper §3.9 Def 10).
+
+    ``KINGSIDE`` corresponds to the rook at ``x = BOARD_SIZE - 1``;
+    ``QUEENSIDE`` to the rook at ``x = 0``. Castling is restricted to
+    the X-axis within a single ``(z, w)``-slice, so the side fully
+    identifies the rook involved once the king's slice is known.
+    """
+
+    KINGSIDE = 0
+    QUEENSIDE = 1
+
+
+CastlingRight = tuple[Color, int, int, CastleSide]
+"""A single castling right: ``(color, z, w, side)`` (paper §3.9 Def 10).
+
+Rights are held by :class:`~chess4d.state.GameState` as a
+``frozenset[CastlingRight]``. Each right is independently revoked when
+the associated king or rook first moves, or when the rook is captured
+on its home square. The right's presence alone implies both the king
+and its associated rook are still on their original back-rank squares.
+"""
+
+
 class PawnAxis(IntEnum):
     """Forward axis of a pawn, fixed at initialization (paper §3.10, Def. 11).
 
