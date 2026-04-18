@@ -37,6 +37,14 @@ ray is modeled as a length-0-or-1 tuple (0 when the target is out of
 bounds, 1 when it is in bounds). Empty-board mobility follows the §3.8
 Theorem 3 stratification formula.
 
+King geometry (§3.9 Definition 9)
+---------------------------------
+The king is a Chebyshev-1 leaper: its 80 displacements are every
+nonzero vector in ``{−1, 0, +1}^4``. Same leaper shape as the knight
+(length-0-or-1 rays); interior mobility 80 (§3.2 Lemma 1). Castling
+(§3.9 Definition 10) requires castling-rights state and is not
+implemented here.
+
 Ordering conventions (load-bearing for tests)
 ---------------------------------------------
 * :data:`ROOK_DIRECTIONS` / :data:`ROOK_RAYS` are indexed in lockstep.
@@ -285,4 +293,47 @@ KNIGHT_NEIGHBORS: Mapping[Square4D, frozenset[Square4D]] = {
 
 Interior mobility is uniformly 48 on ``{2,…,5}^4``; boundary-clipped
 elsewhere by the §3.8 Theorem 3 closed-form stratification.
+"""
+
+
+# --- king -------------------------------------------------------------------
+
+
+KING_DISPLACEMENTS: Tuple[Displacement, ...] = tuple(
+    (dx, dy, dz, dw)
+    for dx, dy, dz, dw in itertools.product((-1, 0, +1), repeat=4)
+    if (dx, dy, dz, dw) != (0, 0, 0, 0)
+)
+"""The 80 king displacements (paper §3.9 Definition 9).
+
+All nonzero vectors in ``{−1, 0, +1}^4`` in lexicographic order (the
+zero tuple is excluded). ``3^4 − 1 = 80`` (§3.2 Lemma 1).
+"""
+
+
+def _build_king_rays() -> dict[Square4D, tuple[tuple[Square4D, ...], ...]]:
+    return {
+        Square4D(x, y, z, w): tuple(
+            _leaper_ray(Square4D(x, y, z, w), d) for d in KING_DISPLACEMENTS
+        )
+        for x, y, z, w in itertools.product(range(BOARD_SIZE), repeat=4)
+    }
+
+
+KING_RAYS: Mapping[Square4D, tuple[tuple[Square4D, ...], ...]] = _build_king_rays()
+"""Per-square king rays, lockstep with :data:`KING_DISPLACEMENTS`.
+
+Same leaper shape as :data:`KNIGHT_RAYS`: each ray is empty (target
+out of bounds) or a one-element tuple (target in bounds).
+"""
+
+
+KING_NEIGHBORS: Mapping[Square4D, frozenset[Square4D]] = {
+    sq: frozenset(t for ray in rays for t in ray) for sq, rays in KING_RAYS.items()
+}
+"""Empty-board king reach — exactly the Chebyshev-1 ball (§3.9 Def 9).
+
+``KING_NEIGHBORS[sq] == {q ∈ B : d∞(sq, q) == 1}``. Interior mobility
+is uniformly 80 (§3.2 Lemma 1); of those 80, exactly 40 preserve
+parity and 40 flip it (§3.8 Prop 2(iv)).
 """
