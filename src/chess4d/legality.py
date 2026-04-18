@@ -26,9 +26,9 @@ not enough that one of several threatened kings has been defended.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable, Iterator
+from typing import TYPE_CHECKING, Callable, Iterator, Optional
 
-from chess4d.geometry import PAWN_CAPTURES
+from chess4d.geometry import BISHOP_RAYS, PAWN_CAPTURES, ROOK_RAYS
 from chess4d.pieces import (
     bishop_moves,
     king_moves,
@@ -130,6 +130,110 @@ def _all_pseudo_legal_moves(color: Color, board: "Board4D") -> Iterator[Move4D]:
             yield from pawn_moves(sq, color, board)
         else:
             yield from _SLIDER_LEAPER_GENS[piece.piece_type](sq, color, board)
+
+
+PinConstraint = tuple[Square4D, Square4D, frozenset[Square4D]]
+"""``(king_sq, pinner_sq, allowed_destinations)`` for a single pin.
+
+A pinned friendly piece may move only to squares in ``allowed_destinations``
+— the ray from its king to the pinner, exclusive of the king but inclusive
+of the pinner (so a pinned piece may capture its pinner). A piece pinned
+against multiple kings carries multiple constraints; a legal destination
+must satisfy every one of them.
+"""
+
+
+def _scan_pin_ray(
+    king_sq: Square4D,
+    ray: tuple[Square4D, ...],
+    friendly: Color,
+    board: "Board4D",
+    pinner_types: frozenset[PieceType],
+    pin_map: dict[Square4D, list[PinConstraint]],
+) -> None:
+    """Walk a single ray from a king; record a pin if the shape matches.
+
+    A pin along this ray exists iff the ray contains exactly one friendly
+    piece (call it ``P``) before any enemy piece, and the first enemy piece
+    encountered has a ``piece_type`` in ``pinner_types``. The allowed-
+    destination set is every square on the ray from ``ray[0]`` through the
+    pinner, inclusive — ``P`` may slide within this interval or capture the
+    pinner, but no further. Pieces currently attacking ``king_sq`` directly
+    (no friendly blocker) are checkers, not pinners, and are skipped here.
+    """
+    first_friendly: Optional[Square4D] = None
+    for idx, sq in enumerate(ray):
+        piece = board._squares.get(sq)
+        if piece is None:
+            continue
+        if piece.color == friendly:
+            if first_friendly is None:
+                first_friendly = sq
+            else:
+                return  # two friendly blockers → no pin along this ray
+        else:
+            if first_friendly is not None and piece.piece_type in pinner_types:
+                allowed = frozenset(ray[: idx + 1])
+                pin_map.setdefault(first_friendly, []).append((king_sq, sq, allowed))
+            return  # any enemy (pinner or not) stops the walk
+
+
+_ROOK_PINNERS: frozenset[PieceType] = frozenset({PieceType.ROOK, PieceType.QUEEN})
+_BISHOP_PINNERS: frozenset[PieceType] = frozenset({PieceType.BISHOP, PieceType.QUEEN})
+
+
+def _compute_pin_map(
+    color: Color, board: "Board4D"
+) -> dict[Square4D, list[PinConstraint]]:
+    """Return every pin constraint on ``color``'s friendly pieces.
+
+    For each friendly king, walks the 8 rook rays (pinner = ROOK/QUEEN)
+    and the 24 bishop rays (pinner = BISHOP/QUEEN). A friendly piece
+    pinned against multiple kings appears once per pin; the list order
+    is the enumeration order of ``kings_of`` × ray index. Used by
+    :meth:`chess4d.state.GameState.legal_moves` to skip the make-unmake
+    validation on candidates that are provably safe (non-king, not in
+    check, not pinned) — the §4.6 ``O(pieces × mobility)`` per-candidate
+    cost collapses to ``O(1)`` per candidate in that regime.
+    """
+    pin_map: dict[Square4D, list[PinConstraint]] = {}
+    for king_sq in kings_of(color, board):
+        rook_rays = ROOK_RAYS[king_sq]
+        for ray in rook_rays:
+            _scan_pin_ray(king_sq, ray, color, board, _ROOK_PINNERS, pin_map)
+        bishop_rays = BISHOP_RAYS[king_sq]
+        for ray in bishop_rays:
+            _scan_pin_ray(king_sq, ray, color, board, _BISHOP_PINNERS, pin_map)
+    return pin_map
+
+
+def _enemy_attacks_with_square_empty(
+    board: "Board4D", vacated: Square4D, enemy: Color
+) -> frozenset[Square4D]:
+    """Return the set of squares the enemy attacks when ``vacated`` is empty.
+
+    Used by :meth:`chess4d.state.GameState.legal_moves` to filter king
+    destinations: if a king at ``K`` moves to any ``dest``, the post-move
+    board has ``K`` empty and ``dest`` occupied by the king. An enemy
+    attacks ``dest`` on that post-move board iff it attacks ``dest`` on
+    the board *with ``K`` empty* (the king at ``dest`` does not block
+    attacks on itself). Capturing king moves are not covered: removing
+    a captured enemy piece may expose further sliders, so
+    :meth:`legal_moves` falls back to make-unmake for those.
+
+    The swap-in/swap-out is O(1) dict mutation; the enemy scan is
+    O(pieces × mobility), but it is amortized across the king's up to
+    80 candidate destinations.
+    """
+    piece = board._squares.pop(vacated)
+    try:
+        attacked: set[Square4D] = set()
+        for origin, enemy_piece in list(board.pieces_of(enemy)):
+            for target in _attacks_from(origin, enemy_piece, board):
+                attacked.add(target)
+    finally:
+        board._squares[vacated] = piece
+    return frozenset(attacked)
 
 
 def any_king_attacked(color: Color, board: "Board4D") -> bool:

@@ -32,7 +32,13 @@ from typing import Iterator, Optional
 
 from chess4d.board import Board4D
 from chess4d.errors import IllegalMoveError
-from chess4d.legality import _all_pseudo_legal_moves, any_king_attacked, is_attacked
+from chess4d.legality import (
+    _all_pseudo_legal_moves,
+    _compute_pin_map,
+    _enemy_attacks_with_square_empty,
+    any_king_attacked,
+    is_attacked,
+)
 from chess4d.zobrist import (
     CASTLING_HASH_TABLE,
     EP_HASH_TABLE,
@@ -565,23 +571,115 @@ class GameState:
     def legal_moves(self) -> Iterator[Move4D]:
         """Yield every legal move for ``side_to_move`` in the current state.
 
-        Non-castling candidates use make-unmake on the underlying board:
-        each pseudo-legal candidate is pushed, king-safety is checked,
-        and the candidate is popped whether or not it's legal.
+        Filters pseudo-legal candidates with a pin-map fast path (Phase
+        6C). A candidate is provably safe — with no simulation — when:
 
-        Castling candidates are enumerated from :attr:`castling_rights`
-        and validated via a full :meth:`push` / :meth:`pop` round-trip
-        — this reuses all of :meth:`_push_castling`'s preconditions
-        without duplicating them.
+        * the mover is not a king,
+        * no friendly king is currently in check, and
+        * the mover's source square is not pinned against any friendly
+          king.
+
+        In that regime the candidate cannot expose any king to a new
+        attack (discovered check requires a pin) and is yielded without
+        the ``O(pieces × mobility)`` make-unmake round-trip.
+
+        Non-capturing king moves take a bulk fast path: a single enemy
+        attack-set scan on the king-removed board is computed once per
+        source square (via
+        :func:`~chess4d.legality._enemy_attacks_with_square_empty`) and
+        cached; each of the up-to-80 king destinations is then an
+        ``O(1)`` set-membership test. Capturing king moves fall back to
+        make-unmake because removing the captured piece may expose
+        sliders behind it. In-check states also fall back (the move
+        must resolve the check; the pin map does not encode that).
+        Pinned non-king candidates with no check are resolved in
+        ``O(1)`` against the precomputed
+        :class:`~chess4d.legality.PinConstraint` list — the destination
+        must lie on every pin ray through the mover.
+
+        Castling and en-passant candidates are enumerated separately
+        and validated by :meth:`_castling_candidates` /
+        :meth:`_en_passant_candidates` (each trials the move through
+        :meth:`push`/``pop``).
 
         The board is bit-identical before and after iteration (assuming
         the caller does not mutate it mid-iteration).
         """
-        candidates = list(_all_pseudo_legal_moves(self.side_to_move, self.board))
+        side = self.side_to_move
+        enemy = Color(1 - side)
+        board = self.board
+        pin_map = _compute_pin_map(side, board)
+        in_check = any_king_attacked(side, board)
+        # Per-king-source cached set of squares the enemy attacks when
+        # that king square is vacated; lets all non-capturing moves from
+        # a given king share one enemy scan.
+        king_unsafe: dict[Square4D, frozenset[Square4D]] = {}
+        # Materialize the pseudo-legal candidate list before any
+        # ``board.push`` — push mutates ``Board4D._squares`` while the
+        # generator iterates it, which raises "dictionary keys changed
+        # during iteration".
+        candidates = list(_all_pseudo_legal_moves(side, board))
         for move in candidates:
-            self.board.push(move)
-            safe = not any_king_attacked(self.side_to_move, self.board)
-            self.board.pop()
+            mover = board._squares.get(move.from_sq)
+            if mover is None:  # pragma: no cover — defensive
+                continue
+            if mover.piece_type is PieceType.KING:
+                if in_check or board._squares.get(move.to_sq) is not None:
+                    # Captures may expose sliders behind the captured
+                    # piece; in-check states need the full resolve-check
+                    # semantics. Fall back to make-unmake.
+                    board.push(move)
+                    safe = not any_king_attacked(side, board)
+                    board.pop()
+                    if safe:
+                        yield move
+                    continue
+                unsafe = king_unsafe.get(move.from_sq)
+                if unsafe is None:
+                    unsafe = _enemy_attacks_with_square_empty(
+                        board, move.from_sq, enemy
+                    )
+                    king_unsafe[move.from_sq] = unsafe
+                if move.to_sq not in unsafe:
+                    yield move
+                continue
+            if in_check:
+                # Non-king mover during check: the pin map doesn't
+                # encode "resolves the check", so simulate.
+                board.push(move)
+                safe = not any_king_attacked(side, board)
+                board.pop()
+                if safe:
+                    yield move
+                continue
+            constraints = pin_map.get(move.from_sq)
+            if constraints is None:
+                # Not a king, not in check, not pinned — cannot expose
+                # any friendly king.
+                yield move
+                continue
+            # Pinned non-king, no current check: destination must lie on
+            # every pin ray through the mover's source.
+            if all(move.to_sq in allowed for (_, _, allowed) in constraints):
+                yield move
+        yield from self._castling_candidates()
+        yield from self._en_passant_candidates()
+
+    def _legal_moves_slow(self) -> Iterator[Move4D]:
+        """Pre-optimization make-unmake path; kept for parity testing.
+
+        Equivalent to :meth:`legal_moves` by construction but validates
+        every candidate with a full ``push``/``any_king_attacked``/``pop``
+        round-trip. Used as the correctness oracle in
+        ``tests/test_legal_moves_parity.py``.
+        """
+        side = self.side_to_move
+        board = self.board
+        candidates = list(_all_pseudo_legal_moves(side, board))
+        for move in candidates:
+            board.push(move)
+            safe = not any_king_attacked(side, board)
+            board.pop()
             if safe:
                 yield move
         yield from self._castling_candidates()
