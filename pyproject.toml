@@ -26,7 +26,10 @@ packages = ["src/chess4d"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-addopts = "-ra --strict-markers"
+addopts = "-ra --strict-markers -m 'not slow'"
+markers = [
+    "slow: exercises the unoptimized legal_moves hot path (run explicitly with '-m slow')",
+]
 
 [tool.ruff]
 line-length = 100

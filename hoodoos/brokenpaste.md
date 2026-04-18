@@ -1,648 +1,333 @@
-# Phase 5 — Castling, en passant, draw detection
+# Maintenance pass — Phase 5 interaction regression coverage
 
-## Scope
+## Why this, why now
 
-Three features, one unifying theme: **rules that require state beyond
-placement and side-to-move**. Each introduces a new piece of game
-history that the board didn't need to know about until now.
+`tests/test_phase5_smoke.py` currently has 4 scenarios — the planned
+ones from Phase 5E. They cover "each feature works when combined with
+the initial position," which is the right thing to verify when the
+feature is new. What they do **not** cover is two-feature collisions:
+situations where a bug would only surface because feature X and
+feature Y are interacting, not because either is broken on its own.
 
-- **Castling** (§3.9 Def 10) needs castling rights — per-side,
-  per-rook-and-king tracking of whether either has moved.
-- **En passant** (§3.10 Def 15) needs an en-passant target — a
-  transient square (at most one per position) where the last-moved
-  pawn can be captured on the next ply.
-- **Draws** need two new counters: the halfmove clock (50-move rule)
-  and a repetition hash history (threefold repetition).
+Phase 6 (performance) is about to introduce incremental Zobrist
+hashing, attack-map caching, and possibly batched legality queries.
+Every one of those touches the hot path of `push` / `pop` /
+`legal_moves` — exactly the surface where two-feature-collision bugs
+hide. Adding regression coverage **now**, before Phase 6 starts,
+means:
 
-Batched together because they share the same architectural concern:
-**state lives on `GameState`, not `Board4D`**. Adding them piecewise
-would mean three rounds of "extend GameState, update push/pop, add
-undo-stack fields, propagate through legal_moves." Doing them once
-keeps the state-model refactor to a single pass.
+- Any performance refactor that breaks a corner case fails a specific
+  named test instead of a vague "something got slower by being wrong."
+- The cost is paid once, in isolation, instead of smeared across the
+  Phase 6 session where we'd be debugging "is this a perf bug or a
+  correctness bug?"
+- Existing coverage (388 tests) doesn't need to change; this is
+  purely additive.
 
-**Explicitly not in this phase:** performance work on `legal_moves`
-(7.4s from the starting position is a known issue, documented at the
-end of this plan). Phase 6 will target that.
+**Expected effort:** small-to-moderate. Roughly 15-25 new tests
+across the Phase 5 feature pairs, no new source code. Session should
+run well under an hour of agent work.
 
-## Before starting: commit Phase 4 state and enter plan mode
-
-Phase 4 shipped three commits on `foxglove` (4A/4B/4C merged from the
-planned 4A-4E sub-phases; the work is all there, just fewer commit
-boundaries than originally specified):
+## Before starting: confirm Phase 5 state
 
 ```
 git log --oneline -8
 ```
 
-Expected top commits: `768b7c5` (startpos), `dfcaa25` (GameState +
-legality), `0752337` (attack primitives), then the Phase 3 commits.
+Expected top of history: `9ea44d8` (Phase 5E smoke), `c6ef246`
+(Phase 5D zobrist), `387e3ab` (Phase 5C clock), `23840c2` (Phase 5B
+ep), `4c76388` (Phase 5A castling).
 
 ```
 git status
 ```
 
-Should be clean or have only incidental changes.
-
-```
-git push
-```
-
-Confirm `foxglove` is up to date before proceeding.
+Should be clean.
 
 /plan
 
-## Architectural invariants (locked from prior phases)
+## Scope: interaction coverage only
 
-- `_PIECE_GEOMETRY` dispatch table for sliders/leapers; do not add
-  elif chains.
-- Pawn geometry bypasses the dispatch table via `_push_pawn`.
-- Pseudo-legal generators do not check king safety; legality lives in
-  `GameState.push` and `GameState.legal_moves`.
-- `Board4D` stays at the placement layer; anything that needs game
-  history lives on `GameState`.
-- Undo-stack entries are tuples appended by `Board4D.push` variants
-  and consumed by `Board4D.pop`. Phase 5 extends the *GameState*
-  undo stack (separate from Board4D's), not the board's.
-- Paper 1-based → code 0-based conversion happens only at UI
-  boundaries.
+This pass is **purely tests**. No source changes. If a test reveals a
+bug, stop, report the bug, and wait for direction — don't fix it
+speculatively during the maintenance pass. A correctness bug in
+Phase 5 features is a Phase 5 bug to triage separately, not something
+to quietly patch under the banner of "adding tests."
 
-## New architectural invariants for Phase 5
+All new tests land in `tests/test_phase5_interactions.py` (a new
+file). Do not edit `test_phase5_smoke.py` — its four scenarios are
+the "each feature in isolation" tests and should stay that way for
+documentation purposes.
 
-- **GameState owns castling rights, en-passant target, halfmove
-  clock, and position history.** Board4D stays placement-only. The
-  division of labor: `Board4D` knows "what piece is where"; `GameState`
-  knows "what rights, clocks, and history apply."
+## The interaction matrix
 
-- **GameState.push manages its own undo stack** (separate from
-  `Board4D._undo`). Each GameState push records the prior values of
-  the new state fields before mutating them; pop restores them. This
-  avoids threading new fields through `Board4D.push`'s signature,
-  which stays pseudo-legal-only.
+Five Phase 5 features: castling, en passant, halfmove clock,
+threefold repetition, check/legality. The pairs we care about are
+the ones where **one feature's state transition could plausibly
+affect the other's correctness**. Not all 10 pairs are interesting;
+these are:
 
-- **Repetition hashing must be order-independent of placement but
-  include castling rights and en-passant target.** A position that
-  can be reached via different move orders must hash to the same
-  value; two placements that look identical but differ in castling
-  rights (one side has castled, the other hasn't but their king is
-  back on its square) must hash differently. Use Zobrist-style XOR
-  hashing (paper §4.7) with a fixed seed.
+### A. Castling × En passant
 
-- **50-move clock resets on pawn moves and captures.** Both are
-  standard chess rules; the paper inherits them by reference.
+- **Castling after a two-step pawn advance.** White pushes a pawn
+  two squares (setting ep_target); black castles. Verify: ep_target
+  is correctly cleared by black's castling (castling is not a pawn
+  move and not a capture, so it clears ep state like any other
+  non-two-step move does). Verify the castling itself is otherwise
+  unaffected.
 
-## Sub-phase 5A — Castling rights + castling move
+- **Two-step pawn advance followed by castling undo.** Push a pawn
+  two-step (sets ep state), push a castling move (clears ep state
+  and mutates rights), pop the castling move. Expected: ep state is
+  restored, castling rights restored, board bit-identical.
 
-**Expected effort: moderate. Rights-tracking plus one new move type.**
+- **En passant capture that removes a rook's home-square protector.**
+  Construct a narrow case where a rook at its home square relies on
+  some defender, and an en-passant capture on an adjacent diagonal
+  removes that defender — specifically test that this does *not*
+  incorrectly clear the rook's castling right. En passant only
+  revokes rights when the captured piece is itself a home-square
+  rook, which pawns never are. This is a confirmation test.
 
-### Castling scope under Oana-Chiru (§3.9 Def 10)
+### B. Castling × Halfmove clock
 
-Castling is restricted to the X-axis within a single `(z, w)`-slice.
-The king and rook involved must both be unmoved; all squares strictly
-between them must be empty; the king must not be in check before the
-move; every square the king traverses (including the destination)
-must not be attacked by any piece from *any* `(z', w')` slice — the
-attack constraint is **global**, not slice-local.
+- **Castling does not reset the clock.** Castling is neither a pawn
+  move nor a capture, so the halfmove clock should increment, not
+  reset. Set the clock to some nonzero value via previous moves,
+  castle, verify clock = previous_clock + 1.
 
-### Castling-rights representation
+- **Castling undo restores clock exactly.** Push a castling move
+  from a state with halfmove_clock = N; verify clock = N+1 after;
+  pop; verify clock = N.
 
-With ~28 kings per side and ~56 rooks per side (1 per back rank × 56
-slices), castling rights is `dict[(Color, Square4D), bool]` where
-the square identifies the rook's starting square. Each entry tracks
-whether the associated rook has moved; the king for a given slice is
-tracked by *each of its eligible rooks* separately (kingside and
-queenside each need their own right). This is more bookkeeping than
-in 2D chess but follows directly from the paper.
+### C. Castling × Threefold repetition
 
-**Simpler alternative worth considering:** since each (color, slice)
-has one king and two back-rank rooks, and all three must be unmoved
-for castling to be legal on that slice, a `frozenset` of "still
-eligible" (color, slice, side) triples is cleaner:
+- **Castling rights affect position hash.** Two states with
+  identical placement but different castling rights must hash
+  differently. This is already covered by `test_zobrist.py` in
+  principle; here we test the *game-flow* version: reach an
+  identical placement twice, once before castling was available and
+  once after rights have been revoked (without castling occurring —
+  just from a king's earlier move), and verify the position_history
+  counts do *not* treat them as the same position.
 
-```python
-CastlingRight = tuple[Color, int, int, CastleSide]  # (color, z, w, side)
-# where CastleSide is KINGSIDE (x=7 rook) or QUEENSIDE (x=0 rook)
+- **Castling then mirror-castling doesn't cause false repetition.**
+  White castles kingside on slice S1; black castles kingside on
+  slice S2. The positions reached are not three-repeats of any prior
+  position even if the placement pattern looks symmetric, because
+  castling rights shifted.
+
+### D. En passant × Halfmove clock
+
+- **En-passant capture resets the clock.** The capturing pawn move
+  is both a pawn move and a capture; both reset. Verify clock = 0
+  after an en-passant capture regardless of its prior value.
+
+- **En-passant undo restores clock.** Set up a clock value N, push
+  an en-passant capture (clock now 0), pop, verify clock = N.
+
+### E. En passant × Threefold repetition
+
+- **En-passant target changes the hash.** This is the FIDE-standard
+  subtle case: two placements identical except one has an
+  ep_target set. The hash should differ. Specifically: reach a
+  position via a pawn two-step (ep target set); reach the *same*
+  placement later without a two-step having just occurred (ep
+  target is None). These positions must hash differently.
+
+- **En passant that expires does not cause false repetition.** A
+  two-step sets ep state; the next ply (not taking the en passant)
+  clears it; if play later returns to the *placement* that existed
+  after the two-step, but without ep state set, those are different
+  positions and repetition counting must not conflate them.
+
+  This is a subtle case and worth writing carefully: the hash must
+  include ep_target, which the existing implementation does. The
+  test confirms that behavior holds under game flow, not just
+  pair-wise hash comparison.
+
+### F. Check × Castling
+
+- **King in check cannot castle.** Standard rule (§3.9 Def 10
+  clause 4). Construct a position where castling would otherwise be
+  legal but the castling king is in check; verify the castling move
+  is rejected with `IllegalMoveError`.
+
+- **King cannot castle through an attacked square.** §3.9 Def 10
+  clause 3 — the transit path must be safe from attackers on *any*
+  slice, not just the castling slice. Construct a position where
+  the king is not in check and the destination is not attacked, but
+  the intermediate square is attacked by a piece on a different
+  `(z', w')` slice. Verify rejection.
+
+- **King cannot castle into check.** The destination square is
+  attacked. Verify rejection.
+
+- **Castling legality is not cached across state.** Push a move
+  that puts the opponent's king position in a state where the
+  opponent *could* castle, then push an opponent non-castling
+  move. The castling right for the opponent still exists in
+  `castling_rights`. Now push another move that causes an attacker
+  to threaten the opponent's intermediate square. Verify that a
+  subsequent castling attempt is rejected — i.e., castling legality
+  is re-evaluated per-call, not inherited from when the right was
+  granted.
+
+### G. Check × En passant
+
+- **En-passant capture that leaves own king in check is illegal.**
+  A pawn pinned by an enemy slider cannot capture en passant if
+  doing so would expose its own king. This is the standard "pinned
+  pawn" case generalized to en passant. Construct a position: white
+  king on some square, white pawn on an adjacent file, black slider
+  along the king's axis with the white pawn as the only blocker.
+  Black two-step-advances an adjacent pawn (sets ep_target). The
+  white pawn *geometrically* can en-passant capture but doing so
+  would remove itself from the pin and expose the white king.
+  Verify the en-passant capture is filtered out of `legal_moves`.
+
+- **En passant gives check.** An en-passant capture that results in
+  the capturer attacking the enemy king. Verify the capture is
+  legal (no self-check) and that `in_check(enemy_side)` is True
+  after the push.
+
+### H. Check × Threefold repetition
+
+- **Checkmate and threefold repetition are independent predicates.**
+  Construct a position where `is_threefold_repetition()` is True and
+  `is_checkmate()` is also True (or at least: verify the two
+  predicates don't interact — one doesn't accidentally suppress the
+  other). A player in checkmate has no legal moves, so they couldn't
+  reach a threefold-repetition state *by moving*; but the position
+  they're in at the moment of checkmate might itself be a
+  three-repeat if the same position arose before. Verify both
+  predicates return True independently.
+
+- **A check in one of the repetition occurrences still counts.** A
+  position where the king is in check can be a "repeat" just like
+  any other — the rules don't exclude check positions from
+  repetition counting. Set up a cycle that passes through a checked
+  position three times; verify threefold triggers.
+
+### I. Clock × Threefold repetition
+
+- **Fifty-move and threefold are independent.** Positions where
+  both trigger; verify both predicates fire.
+
+- **Pawn move resets clock but doesn't disrupt repetition counting.**
+  The clock and the history are independent fields; a pawn move
+  resets the clock but only *changes* the position (which naturally
+  changes the hash and terminates any existing repetition cycle).
+  Verify the clock reset is orthogonal — no spurious history
+  truncation.
+
+## Additional regression coverage not strictly "interactions"
+
+### J. Undo-stack depth stress
+
+- **Long alternating-castle sequence with undos.** Push 20 castling
+  moves (across different slices), pop all 20, verify bit-identical
+  state across all five Phase 5 fields and the board. This is the
+  undo-stack-at-depth test that Phase 5's own tests don't cover.
+
+- **Interleaved en-passant and normal pushes with full unwind.**
+  Push 10 moves with an en-passant capture somewhere in the middle,
+  pop all 10, verify everything restored.
+
+### K. Rights-revocation edge cases
+
+- **Rook moves to and from home square.** A rook moves away from
+  its home square (revokes right), moves back (right stays
+  revoked). Verify this — the right revocation is permanent, not
+  triggered by "rook not at home right now."
+
+- **Captured-rook replacement.** Rook at home is captured (revokes
+  right), captured pawn is promoted to a rook at the *same square*
+  later. Verify the right stays revoked — promotion doesn't grant
+  castling rights to the new rook. This is the Oana-Chiru analog
+  of "promoted rook doesn't restore castling" in 2D chess.
+
+### L. Hypothesis property: push-pop under all Phase 5 features
+
+One property test that:
+- Generates a random sequence of 5-15 legal moves from the initial
+  position (most will be ordinary pushes; castling and en passant
+  will be rare by random sampling but will occur).
+- Pushes all, pops all.
+- Asserts: board equal, castling_rights equal, ep state equal,
+  halfmove_clock equal, position_history equal, side_to_move equal.
+
+This is the strongest property-test guarantee that Phase 5's undo
+stack is sound. Set `max_examples=30`, `deadline=None`, and
+`suppress_health_check=[HealthCheck.function_scoped_fixture]`.
+
+**Note on performance:** this test will be slow because each
+generated move requires a `legal_moves()` call, which is the 7s hot
+path. The test is acceptable at ~3-5 minutes total for 30 examples;
+if it's dramatically slower, cut max_examples to 10 and mark it
+`@pytest.mark.slow` with a pytest marker configured in
+`pyproject.toml` to skip by default.
+
+## Deliverables
+
+One new file: `tests/test_phase5_interactions.py` with sections A-L
+from above. Aim for 20-30 tests total. Section L (Hypothesis) is one
+test with property-test semantics.
+
+Do **not** modify:
+- Any source file in `src/chess4d/`.
+- Any existing test file.
+- `pyproject.toml` (except to add the `slow` marker if Section L
+  needs it, and only if necessary — we're prefer-not to slow the
+  default test run).
+
+## Gates after the session
+
+```
+pytest -v                         # expect ~408-418 tests (388 + 20-30 new)
+mypy --strict src/chess4d         # no changes here, should still pass
+ruff check src tests              # new tests must pass ruff
+git diff --stat HEAD~1..HEAD      # verify only tests/ changed
 ```
 
-and a position has a `frozenset[CastlingRight]` of currently-eligible
-castles. Pick one representation; stick with it.
+## Commit
 
-### State additions to GameState
+After all tests pass:
 
-```python
-@dataclass
-class GameState:
-    board: Board4D
-    side_to_move: Color
-    castling_rights: frozenset[CastlingRight]
-    # (existing fields from Phase 4)
-```
-
-`GameState.push` must:
-
-1. Detect if the move is a castling move (`move.is_castling = True`);
-   validate all preconditions (§3.9 Def 10 numbered list).
-2. For non-castling moves, revoke any castling rights the move
-   invalidates: moving a king revokes both its slice's castling
-   rights; moving or capturing a back-rank rook revokes that rook's
-   right; rook being captured on its home square also revokes.
-
-### Castling-move validation
-
-A castling move has `is_castling=True` and move.from_sq is a king's
-square on some `(z, w)`-slice. Validate:
-
-1. The castling right for this (color, slice, side) is in
-   `castling_rights`.
-2. All squares between the king and rook on the X-axis are empty.
-3. King is not in check (`any_king_attacked(side, board)` is False
-   *before* the move).
-4. The king's transit path — its start, the intermediate square, and
-   its destination — contains no square attacked by any enemy piece
-   from any slice.
-
-Then apply: king moves two squares toward the rook along X; rook
-moves to the square immediately adjacent to the king on the opposite
-side. The move is a *compound* mutation of two pieces on the board;
-encode this carefully in the undo stack.
-
-### Move encoding
-
-`Move4D` already has `is_castling: bool`. The from_sq is the king's
-square; the to_sq is the king's destination. The rook's movement is
-derived from the from_sq and to_sq by the castling rule (king moves
-2 toward rook → rook crosses to the other side of the king). This
-keeps Move4D's shape stable.
-
-### Undo for castling
-
-The GameState undo-stack entry for a castling move needs to record:
-- The prior castling_rights set (before rights were revoked).
-- The prior side_to_move.
-- A note that this was a castling move (so pop knows to move both
-  pieces back, not just one).
-
-The board's own undo stack will get a two-move sequence (king move,
-rook move) or a single compound entry — pick the implementation that
-keeps `Board4D.pop` clean. Probably: `GameState.push` for a castling
-move calls `Board4D` twice via a new internal `_push_raw(move)` that
-skips legality (castling has already validated everything), and
-`GameState.pop` reverses via two `Board4D.pop` calls. This keeps the
-compound-move structure at the GameState layer.
-
-### Tests: `tests/test_castling.py`
-
-- Castling-rights initial state at `initial_position()`: every back-
-  rank king and both of its rooks per populated slice has rights.
-  Verify the frozenset has the expected cardinality (4 central slices
-  × 2 colors × 2 sides + 24 white-only × 2 sides + 24 black-only × 2
-  sides = 112 castling rights).
-- Moving a king revokes that slice's castling rights for that color
-  (both sides).
-- Moving a rook revokes only its own castling right.
-- Capturing a rook on its home square revokes the opponent's right
-  for that side.
-- Castling legal: set up a position where all preconditions hold;
-  `is_castling=True` move is accepted; both king and rook end up in
-  the correct squares.
-- Castling blocked by a piece between king and rook: rejected.
-- Castling through check: set up an enemy piece attacking an
-  intermediate square in the king's path *from a different slice*;
-  castling is rejected even though the attacker is elsewhere (§3.9
-  Def 10 clause 3, the "global attack" requirement).
-- Castling out of check: rejected (clause 4).
-- Castling into check: rejected (king's destination is attacked).
-- Post-castling, both king's and rook's castling rights on that slice
-  are gone from the set.
-- Castling undo: push a castling move, pop it, board is bit-identical,
-  castling rights restored, side-to-move restored.
-
-Commit after 5A:
 ```
 git add -A
-git commit -m "Phase 5A: castling rights and castling moves (§3.9 Def 10)
+git commit -m "Phase 5 regression tests: feature-interaction coverage
 
-GameState tracks castling_rights as frozenset[CastlingRight]; push
-validates all six paper preconditions including the global-attack
-constraint on the king's transit path. Rights are revoked by king
-moves, rook moves, and rook captures on home squares.
+Adds tests/test_phase5_interactions.py covering pair-wise interactions
+between castling, en passant, halfmove clock, threefold repetition,
+and check/legality. Also covers undo-stack depth stress, rights-
+revocation edge cases (rook returning home, promoted-rook rights),
+and a Hypothesis property test exercising push-pop soundness across
+all Phase 5 state fields.
 
-Castling is a compound move: GameState.push/pop dispatches two
-Board4D mutations but records a single logical move in its own
-undo stack."
+No source changes. Prepares the library for Phase 6 performance work
+by establishing correctness regression coverage before the hot path
+gets refactored."
 git push
 ```
 
-## Sub-phase 5B — En passant
-
-**Expected effort: moderate. Transient state + axis-parameterized.**
-
-### En-passant scope (§3.10 Def 15)
-
-En passant is defined independently for Y-oriented and W-oriented
-pawns. The mechanics mirror 2D chess:
-
-- A pawn makes a two-step move from its starting rank to rank 3
-  (0-based rank 2 for white Y-pawn, rank 5 for black Y-pawn; similarly
-  for W-pawns along the W axis).
-- On the *immediately following* ply, an opposing pawn adjacent on
-  the x-axis can capture it as if it had only advanced one square.
-- The capturing pawn moves to the skipped square; the captured pawn is
-  removed from its actual position (rank 3).
-- Right to en-passant expires after that one ply.
-
-**Axis restriction (§3.10 Def 15 final sentence):** mixed-direction en
-passant (Y vs W) does not exist. A Y-pawn cannot capture a W-pawn en
-passant, even if the geometry might otherwise allow it.
-
-### State additions to GameState
-
-```python
-ep_target: Optional[Square4D]  # the skipped square, if any
-ep_victim: Optional[Square4D]  # where the two-stepped pawn actually is
-ep_axis: Optional[PawnAxis]    # Y or W; enforces no-mixed-direction
-```
-
-One two-stepping pawn sets all three together on its push; every
-subsequent push clears them (unless the next push is *itself* another
-two-step pawn, which sets them to new values).
-
-### Move encoding
-
-`Move4D.is_en_passant: bool` already exists. For an en-passant capture:
-- `from_sq` is the capturing pawn's position.
-- `to_sq` is the `ep_target` square.
-- `is_en_passant = True` signals the capture mechanics.
-
-The victim's square (different from `to_sq`) is recovered from
-`ep_victim` at apply-time, so it doesn't need to be on the move.
-
-### Validation
-
-In `GameState.push`, when handling a pawn move:
-
-1. If `move.is_en_passant`:
-   - Verify `ep_target` is set and `move.to_sq == ep_target`.
-   - Verify the capturing pawn's axis matches `ep_axis` (no mixed).
-   - Verify the capturing pawn is adjacent to the ep_target on the
-     x-axis (|Δx| = 1, other coords match the pre-step square).
-   - Apply: remove the capturing pawn from from_sq, place it on
-     to_sq, remove the victim from `ep_victim`.
-2. Otherwise, detect if this move is a pawn two-step and set
-   `ep_target / ep_victim / ep_axis` for the next ply.
-3. If not a two-step, clear all three.
-
-### Pseudo-legal generation
-
-`pawn_moves` must also yield en-passant captures as candidates when
-the GameState has an `ep_target`. But `pawn_moves` currently takes
-`(origin, color, board)` — no game state. Two options:
-
-A) **Pass GameState (or just ep state) through.** `pawn_moves(origin,
-   color, board, ep_target=None, ep_axis=None)`. Pawn is already
-   axis-parameterized and special-cased; this is more of the same.
-
-B) **Emit en-passant from GameState, not pawn_moves.** `GameState.
-   legal_moves` collects `pawn_moves` results and appends en-passant
-   candidates separately when `ep_target` is set.
-
-**Recommend B** — keeps `pawn_moves` concerned only with moves
-intrinsic to the pawn's position, and `GameState` the sole owner of
-transient position-dependent rules. Follow the same pattern castling
-uses (validation in GameState, not in piece generators).
-
-### Tests: `tests/test_en_passant.py`
-
-- ep_target is None at `initial_position()`.
-- Pawn two-step sets ep_target, ep_victim, ep_axis correctly for Y
-  and W orientations, white and black (four combinations).
-- ep_target clears after any next move that isn't itself a two-step.
-- En-passant capture legal: set up a two-step; opposing same-axis
-  pawn on adjacent x-file captures en passant; victim is removed
-  from its actual rank-3 square.
-- En-passant not available one ply later (if the two-stepping player
-  makes any other move the following turn, the right expires).
-- Mixed-axis en passant rejected: Y-pawn two-steps, W-pawn on adjacent
-  x-file attempts en passant → rejected with clear error (§3.10 Def
-  15 final sentence).
-- En-passant undo: push en-passant, pop, the captured pawn is
-  restored to its actual position (not the ep_target), capturing
-  pawn is back on its pre-capture square, ep_target is restored.
-- Multi-slice en passant: two-step occurs on (z=3, w=4); an
-  adjacent-x-file pawn on the same slice can capture en passant; a
-  pawn on a different slice at the same (x, y) cannot (en passant is
-  slice-local).
-- Capturing a pawn en passant revokes the victim's any-rook castling
-  rights? No — pawns don't interact with castling rights. Test that
-  castling rights are unchanged after en passant.
-
-Commit after 5B:
-```
-git add -A
-git commit -m "Phase 5B: en passant (§3.10 Def 15)
-
-GameState tracks (ep_target, ep_victim, ep_axis) — set by pawn two-
-steps, cleared on the following ply. The axis field enforces the
-no-mixed-direction rule: a Y-pawn cannot en-passant capture a W-pawn.
-
-En-passant candidates emitted by GameState.legal_moves, not
-pawn_moves, keeping pseudo-legal generators concerned only with
-intrinsic pawn geometry."
-git push
-```
-
-## Sub-phase 5C — Halfmove clock + 50-move rule
-
-**Expected effort: small. One counter, one draw predicate.**
-
-### State additions
-
-```python
-halfmove_clock: int = 0
-```
-
-### Update rules
-
-Standard chess (the paper inherits these):
-- Increment `halfmove_clock` on every push.
-- Reset to 0 on a pawn move (any pawn push, including captures and
-  promotions).
-- Reset to 0 on a capture (any move where `captured is not None`).
-
-### Draw predicate
-
-```python
-def is_fifty_move_draw(self) -> bool:
-    """True iff halfmove_clock >= 100 (50 full moves)."""
-    return self.halfmove_clock >= 100
-```
-
-The 50-move rule is a draw *claim* in FIDE rules (a player can claim
-it, not automatic), but the simpler interpretation is automatic at
-the 75-move mark. For Phase 5, go with the claim-at-50 version
-(predicate only; callers decide whether to honor it). Document the
-choice.
-
-### Tests: `tests/test_fifty_move.py`
-
-- Halfmove clock starts at 0.
-- Non-pawn non-capture move increments clock.
-- Pawn move resets clock.
-- Capture resets clock (test with a non-pawn capturing).
-- Clock restored by pop after any of the above.
-- `is_fifty_move_draw` returns True only at clock >= 100.
-
-Commit after 5C:
-```
-git add -A
-git commit -m "Phase 5C: halfmove clock and 50-move draw predicate
-
-halfmove_clock increments on every push; resets on any pawn move or
-any capture. is_fifty_move_draw() is a non-automatic predicate;
-callers decide whether to honor it. FIDE's 'claim at 50' semantics,
-not the automatic-at-75 variant."
-git push
-```
-
-## Sub-phase 5D — Zobrist hashing + threefold repetition
-
-**Expected effort: moderate. New hashing module plus history tracking.**
-
-### New module: `src/chess4d/zobrist.py`
-
-Zobrist-style position hashing (paper §4.7). Random bitstrings for
-each `(square, piece)` combination, plus additional bitstrings for
-side-to-move, each castling right, and each possible en-passant
-target.
-
-```python
-# At module load:
-_SEED = 0x4D_CHE55_20_26  # fixed seed for reproducible hashes
-_PIECE_HASHES: dict[(Square4D, Color, PieceType, Optional[PawnAxis]), int]
-_SIDE_HASH: int  # XOR when black to move
-_CASTLING_HASHES: dict[CastlingRight, int]
-_EP_HASHES: dict[Square4D, int]
-```
-
-(The pawn-axis wrinkle: two pawns on the same square of different
-axes hash differently. This matters because promotion changes
-placement in a way that should change the hash.)
-
-### Hash function
-
-```python
-def hash_position(gs: GameState) -> int:
-    """64-bit Zobrist hash of the game state.
-
-    Two positions have the same hash iff:
-    - All piece placements match (including pawn axis).
-    - Side-to-move matches.
-    - Castling rights set matches.
-    - En-passant target matches.
-
-    Does NOT include halfmove clock (irrelevant to position
-    repetition).
-    """
-```
-
-Implementation: XOR all the relevant component hashes.
-
-**Performance note:** a naive "iterate every square" hash is O(4096).
-An incremental hash maintained on push/pop is O(1) but adds
-complexity. Phase 5 uses the naive version; Phase 6 incremental.
-
-### State additions
-
-```python
-position_history: list[int]  # hashes of each position in this game
-```
-
-Populated by push (after state update, append the new hash); truncated
-by pop. The full history is kept, not just a set — threefold
-repetition counts exact occurrences.
-
-### Draw predicate
-
-```python
-def is_threefold_repetition(self) -> bool:
-    """True iff the current position hash has occurred 3+ times."""
-    current = hash_position(self)
-    return self.position_history.count(current) >= 3
-```
-
-Like 50-move, this is a claim predicate; callers decide.
-
-### Tests: `tests/test_zobrist.py` + `tests/test_threefold.py`
-
-Zobrist:
-- Two independently-constructed `initial_position()` states hash
-  equally.
-- Moving and un-moving returns to the same hash.
-- Different piece placements produce different hashes (sample 50
-  random placements, verify all distinct hashes).
-- Same placement with different side-to-move produces different
-  hashes.
-- Same placement with different castling rights produces different
-  hashes.
-- Pawn axis in hash: two placements identical except one square
-  holds a Y-pawn vs a W-pawn should hash differently.
-
-Threefold:
-- Initial position: is_threefold_repetition is False.
-- Position reached once: False.
-- Position reached twice: False.
-- Position reached three times: True.
-- After the position is "left" (hash changes), it's no longer
-  three-repeat even if it was before.
-- Classic "shuffle kings back and forth" test: white king A1↔A2,
-  black king A7↔A8, after six plies (three occurrences of the
-  starting-cycle position) threefold triggers.
-
-Commit after 5D:
-```
-git add -A
-git commit -m "Phase 5D: Zobrist hashing and threefold repetition
-
-New module chess4d.zobrist: fixed-seed Zobrist hashes over piece
-placement, side-to-move, castling rights, en-passant target. Pawn
-axis is part of the hash so promotion changes it correctly.
-
-GameState tracks position_history: list[int]; is_threefold_repetition
-is a claim predicate, not automatic.
-
-Naive per-call hashing (O(pieces)); incremental hashing deferred to
-Phase 6 performance work."
-git push
-```
-
-## Sub-phase 5E — Integration + smoke
-
-**Expected effort: small. Exercising all of Phase 5 together.**
-
-### Smoke tests: `tests/test_phase5_smoke.py`
-
-- **Full castling game:** set up a position where white can castle
-  kingside on one slice; play: advance rook's path clearing pawns
-  (3-4 plies), castle, verify rights revoked, push/pop round-trip
-  preserves everything.
-
-- **En passant + 50-move interaction:** play a sequence that
-  includes a two-step, an en-passant capture (resets clock), then
-  non-pawn-non-capture moves, verify clock increments correctly.
-
-- **Repetition with castling rights:** reach a position twice via
-  different move orders; if castling rights differ between the two
-  paths (one side castled, the other didn't), the hashes differ and
-  repetition does not count. Verify explicitly.
-
-- **Initial position sanity:** call `initial_position()`,
-  `legal_moves()` still returns candidates (performance is awful but
-  correctness holds — see deferred work note below).
-
-### Commit after 5E:
-```
-git add -A
-git commit -m "Phase 5 smoke: castling + en passant + clocks + repetition
-
-End-to-end smoke tests exercising Phase 5 features together. All
-interactions behave correctly: rights revoke, clocks reset, hashes
-distinguish states that differ only in game-history metadata."
-git push
-```
-
-## After all five sub-phases
-
-Final gates:
-```
-pytest -v            # expect ~380-420 tests
-mypy --strict src/chess4d
-ruff check src tests
-git log --oneline -12
-```
-
-Sanity: `initial_position()` still returns a valid state; all Phase
-4 behavior preserved; new features available via the public
-`GameState` API.
-
-## Request before starting 5A
-
-Before implementing anything, show me:
-
-1. **Castling-rights representation.** Which of the two options (per-
-   rook `dict[(Color, Square4D), bool]` vs per-(color, slice, side)
-   `frozenset[CastlingRight]`)? Justify briefly.
-
-2. **En-passant emission strategy.** Option A (pass ep state into
-   `pawn_moves`) or Option B (emit from `GameState.legal_moves`)? My
-   recommendation was B; if you pick A, give a reason.
-
-3. **GameState undo stack shape.** Phase 4's undo stack was
-   essentially `Board4D._undo` (piece placement only). Phase 5 needs
-   to undo castling rights, ep state, halfmove clock, and position
-   history. Do you introduce a separate `GameState._undo` list of
-   records, or do you embed these in Board4D's undo entries? My
-   expectation: a separate `GameState._undo: list[_GameStateUndo]`
-   that pairs 1:1 with `Board4D._undo` but carries the game-level
-   deltas. Confirm or propose an alternative.
-
-4. **Castling compound-move encoding.** Does `GameState.push` for
-   a castling move call `Board4D.push` twice (king move, then rook
-   move) and record two board undos, or once with a compound mutation
-   that `Board4D` knows about? The two-push approach preserves
-   `Board4D`'s pseudo-legal invariants; the compound approach is a
-   new `Board4D` API. I lean toward two pushes with a single
-   `GameState._undo` entry wrapping both. Confirm or propose.
-
-5. **Zobrist seed.** Pick a fixed seed value and declare it in the
-   module. It should be literally a constant, not computed; this
-   ensures hashes are reproducible across runs and across the test
-   suite. The paper doesn't specify; just pick one.
-
-## Deferred work (tracked, not for this phase)
-
-### Performance — `legal_moves` at 7.4s from initial position
-
-Phase 4's `GameState.legal_moves()` on the 896-piece starting
-position takes ~7.4 seconds wall-clock for its 2,356 candidates. The
-dominant cost is the push-check-pop-per-candidate pattern combined
-with the full attack scan per check. This is *correct* but unusable
-for any search or gameplay integration.
-
-Phase 5 does not address this. Phase 6 will: incremental attack
-maps, incremental Zobrist hashing, and either bitboard-style or
-VSA-style batched legality checks. Target: `legal_moves()` from the
-initial position in under 200ms, ideally under 50ms.
-
-The VSA/HDC approach from the chess-spectral work may genuinely
-earn its place here (unlike in move generation, where we discussed
-it doesn't). Attack-map construction is exactly the "query a lot of
-attackers against a lot of targets" operation that binds/unbinds do
-well, and the 896-piece density makes the fixed dimensional cost
-amortize favorably.
-
-### State tracking for alternative variants
-
-`GameState` is currently Oana-Chiru-specific (the castling scope,
-the en-passant axis restriction, the initial position). If future
-work implements alternative 4D rulesets (Santoso, community variants,
-the dimensional-consistent family from the spectral reflection),
-some of this state model will need abstraction. Not in Phase 5.
-
-### Connector to chess-spectral encoder
-
-The library is now feature-complete enough to be useful to the
-spectral encoder. The optional `[spectral]` extra hooks up later.
-
-## Out of scope for Phase 5 (reminders)
-
-- **Legal-move caching, attack-map caching, incremental hashing**
-  — all Phase 6.
-- **Game-termination orchestration** — `is_checkmate`, `is_stalemate`,
-  `is_fifty_move_draw`, `is_threefold_repetition` are predicates.
-  No `game_result: GameResult` enum consolidating them in this phase;
-  callers compose the predicates themselves.
-- **Resignation, draw offers, draw by insufficient material** — FIDE
-  rules that require a player model. Skip.
-- **Move notation (SAN-equivalent)** — still the coordinate-move
-  notation from earlier phases. SAN-equivalent is a future phase.
-- **FEN-equivalent serialization** — not yet; comes with the
-  notation phase.
+## Request before writing tests
+
+Show me:
+
+1. **Your proposed test scenarios for sections F (Check × Castling)
+   and G (Check × En passant)** — specifically the position setup.
+   These are the most geometrically involved cases and the ones
+   where a poorly-constructed test would pass or fail for reasons
+   unrelated to the feature being tested. I want to see the setup
+   positions before the asserts are written.
+
+2. **Your decision on Section L's performance strategy.** Will the
+   hypothesis test run as part of the default `pytest` invocation,
+   or will it be marked slow? If marked slow, how does the
+   configuration look in `pyproject.toml`?
+
+3. **Any test from sections A-L that you think is redundant with
+   existing coverage.** If something I listed here is already
+   covered by Phase 5's own tests, skip it and tell me why. The
+   goal is new coverage, not duplication.
