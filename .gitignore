@@ -43,3 +43,6 @@ coverage.xml
 # OS metadata
 .DS_Store
 Thumbs.db
+
+# Session planning notes (not part of the project spec)
+hoodoos/brokenpaste.md
