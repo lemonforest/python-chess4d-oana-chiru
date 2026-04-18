@@ -33,6 +33,7 @@ from chess4d.pieces import (
     bishop_moves,
     king_moves,
     knight_moves,
+    pawn_moves,
     queen_moves,
     rook_moves,
 )
@@ -113,6 +114,22 @@ def in_check(color: Color, board: "Board4D") -> bool:
     ``color`` that lies in ``Att_{1−color}(board)``.
     """
     return any_king_attacked(color, board)
+
+
+def _all_pseudo_legal_moves(color: Color, board: "Board4D") -> Iterator[Move4D]:
+    """Yield every pseudo-legal move for ``color`` in ``board``.
+
+    Dispatches pawns through :func:`pawn_moves` (which handles the
+    color-/axis-parameterized forward-and-capture rules and emits the
+    four promotion variants) and everything else through the
+    :data:`_SLIDER_LEAPER_GENS` table. King-safety (§3.4 Def 3) is not
+    applied here; that is the caller's concern (see :class:`GameState`).
+    """
+    for sq, piece in board.pieces_of(color):
+        if piece.piece_type is PieceType.PAWN:
+            yield from pawn_moves(sq, color, board)
+        else:
+            yield from _SLIDER_LEAPER_GENS[piece.piece_type](sq, color, board)
 
 
 def any_king_attacked(color: Color, board: "Board4D") -> bool:

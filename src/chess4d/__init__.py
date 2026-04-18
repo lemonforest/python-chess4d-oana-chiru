@@ -31,6 +31,7 @@ from chess4d.pieces import (
     queen_moves,
     rook_moves,
 )
+from chess4d.state import GameState
 from chess4d.types import (
     BOARD_SIZE,
     Color,
@@ -45,6 +46,7 @@ __all__ = [
     "BOARD_SIZE",
     "Board4D",
     "Color",
+    "GameState",
     "IllegalMoveError",
     "Move4D",
     "PawnAxis",
