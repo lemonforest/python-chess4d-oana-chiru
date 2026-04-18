@@ -59,7 +59,7 @@ from __future__ import annotations
 import itertools
 from typing import Mapping, Tuple
 
-from chess4d.types import BOARD_SIZE, Square4D
+from chess4d.types import BOARD_SIZE, Color, PawnAxis, Square4D
 
 Displacement = Tuple[int, int, int, int]
 
@@ -336,4 +336,137 @@ KING_NEIGHBORS: Mapping[Square4D, frozenset[Square4D]] = {
 ``KING_NEIGHBORS[sq] == {q ∈ B : d∞(sq, q) == 1}``. Interior mobility
 is uniformly 80 (§3.2 Lemma 1); of those 80, exactly 40 preserve
 parity and 40 flip it (§3.8 Prop 2(iv)).
+"""
+
+
+# --- pawn -------------------------------------------------------------------
+
+# Pawn geometry is keyed by ``(color, axis)``: four keys total, since a
+# pawn's forward axis is either Y (index 1) or W (index 3) and its color
+# picks the sign (white = +1, black = −1). Per §3.10 Definitions 11-14:
+#   * forward moves are one step along the forward axis, plus a two-step
+#     from the starting rank;
+#   * captures are diagonal in the 2D plane spanned by the x-axis and the
+#     forward axis (X-Y for Y-pawns; X-W for W-pawns). No XZ / YZ / ZW
+#     captures exist (Def 13);
+#   * promotion fires when the forward coordinate reaches the terminal
+#     rank of the pawn's forward axis.
+
+
+_PAWN_KEYS: Tuple[Tuple[Color, PawnAxis], ...] = (
+    (Color.WHITE, PawnAxis.Y),
+    (Color.BLACK, PawnAxis.Y),
+    (Color.WHITE, PawnAxis.W),
+    (Color.BLACK, PawnAxis.W),
+)
+
+
+PAWN_DIRECTION: Mapping[Tuple[Color, PawnAxis], int] = {
+    (Color.WHITE, PawnAxis.Y): +1,
+    (Color.BLACK, PawnAxis.Y): -1,
+    (Color.WHITE, PawnAxis.W): +1,
+    (Color.BLACK, PawnAxis.W): -1,
+}
+"""Sign of forward motion along ``axis`` for ``color`` (§3.10 Def 11-12).
+
+White advances toward higher forward-axis indices, black toward lower.
+"""
+
+
+PAWN_START_RANK: Mapping[Tuple[Color, PawnAxis], int] = {
+    (Color.WHITE, PawnAxis.Y): 1,
+    (Color.BLACK, PawnAxis.Y): BOARD_SIZE - 2,
+    (Color.WHITE, PawnAxis.W): 1,
+    (Color.BLACK, PawnAxis.W): BOARD_SIZE - 2,
+}
+"""Forward-axis coordinate of the pawn's starting rank (0-based)."""
+
+
+PAWN_PROMOTION_RANK: Mapping[Tuple[Color, PawnAxis], int] = {
+    (Color.WHITE, PawnAxis.Y): BOARD_SIZE - 1,
+    (Color.BLACK, PawnAxis.Y): 0,
+    (Color.WHITE, PawnAxis.W): BOARD_SIZE - 1,
+    (Color.BLACK, PawnAxis.W): 0,
+}
+"""Terminal forward-axis coordinate that triggers promotion (§3.10 Def 14)."""
+
+
+def _shift(sq: Square4D, axis: int, delta: int) -> Square4D:
+    coords = [sq.x, sq.y, sq.z, sq.w]
+    coords[axis] += delta
+    return Square4D(coords[0], coords[1], coords[2], coords[3])
+
+
+def _build_pawn_forward_moves(
+    color: Color, axis: PawnAxis
+) -> dict[Square4D, tuple[Square4D, ...]]:
+    direction = PAWN_DIRECTION[(color, axis)]
+    start_rank = PAWN_START_RANK[(color, axis)]
+    axis_index = int(axis)
+    result: dict[Square4D, tuple[Square4D, ...]] = {}
+    for x, y, z, w in itertools.product(range(BOARD_SIZE), repeat=4):
+        origin = Square4D(x, y, z, w)
+        one = _shift(origin, axis_index, direction)
+        if not one.in_bounds():
+            result[origin] = ()
+            continue
+        if origin[axis_index] == start_rank:
+            two = _shift(origin, axis_index, 2 * direction)
+            # Two-step requires the second square in-bounds, which it
+            # always is from the start rank on an 8-wide board, but the
+            # ``in_bounds`` guard keeps this robust under future changes.
+            if two.in_bounds():
+                result[origin] = (one, two)
+                continue
+        result[origin] = (one,)
+    return result
+
+
+def _build_pawn_captures(
+    color: Color, axis: PawnAxis
+) -> dict[Square4D, tuple[Square4D, ...]]:
+    direction = PAWN_DIRECTION[(color, axis)]
+    axis_index = int(axis)
+    result: dict[Square4D, tuple[Square4D, ...]] = {}
+    for x, y, z, w in itertools.product(range(BOARD_SIZE), repeat=4):
+        origin = Square4D(x, y, z, w)
+        targets: list[Square4D] = []
+        for dx in (-1, +1):
+            target_x = origin.x + dx
+            target_forward = origin[axis_index] + direction
+            if not (0 <= target_x < BOARD_SIZE):
+                continue
+            if not (0 <= target_forward < BOARD_SIZE):
+                continue
+            # Diagonal is in the (x, forward-axis) 2D plane (§3.10 Def 13).
+            coords = [origin.x, origin.y, origin.z, origin.w]
+            coords[0] = target_x
+            coords[axis_index] = target_forward
+            targets.append(Square4D(coords[0], coords[1], coords[2], coords[3]))
+        result[origin] = tuple(targets)
+    return result
+
+
+PAWN_FORWARD_MOVES: Mapping[
+    Tuple[Color, PawnAxis], Mapping[Square4D, tuple[Square4D, ...]]
+] = {key: _build_pawn_forward_moves(*key) for key in _PAWN_KEYS}
+"""Per-``(color, axis)`` forward-target table (§3.10 Def 12).
+
+``PAWN_FORWARD_MOVES[color, axis][origin]`` is a tuple of target squares
+in nearest-to-farthest order: the one-step target followed by the
+two-step target when ``origin`` sits on the starting rank. The tuple is
+empty only when the one-step would leave the board (which in normal
+play cannot happen — a pawn on the final rank would have already
+promoted).
+"""
+
+
+PAWN_CAPTURES: Mapping[
+    Tuple[Color, PawnAxis], Mapping[Square4D, tuple[Square4D, ...]]
+] = {key: _build_pawn_captures(*key) for key in _PAWN_KEYS}
+"""Per-``(color, axis)`` diagonal-capture table (§3.10 Def 13).
+
+Captures are restricted to the 2D plane spanned by the x-axis and the
+pawn's forward axis: 0, 1, or 2 targets per origin depending on
+boundary clipping.
 """

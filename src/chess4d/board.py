@@ -25,6 +25,9 @@ from chess4d.geometry import (
     KING_RAYS,
     KNIGHT_NEIGHBORS,
     KNIGHT_RAYS,
+    PAWN_CAPTURES,
+    PAWN_FORWARD_MOVES,
+    PAWN_PROMOTION_RANK,
     QUEEN_NEIGHBORS,
     QUEEN_RAYS,
     ROOK_NEIGHBORS,
@@ -48,7 +51,18 @@ _PIECE_GEOMETRY: dict[PieceType, tuple[_RaysMap, _NeighborsMap]] = {
 Adding a new piece type is purely additive: register an entry here
 (leapers use singleton rays) and :meth:`Board4D.push` picks it up
 without any branching change.
+
+Pawns are deliberately excluded: their geometry depends on ``(color,
+pawn_axis)`` and their move vs. capture sets are disjoint rather than
+unioned, so forcing them through this table would require more
+abstraction machinery than a targeted :meth:`Board4D._push_pawn`
+branch.
 """
+
+
+_PROMOTION_TYPES: frozenset[PieceType] = frozenset(
+    {PieceType.QUEEN, PieceType.ROOK, PieceType.BISHOP, PieceType.KNIGHT}
+)
 
 
 class Board4D:
@@ -62,8 +76,11 @@ class Board4D:
 
     def __init__(self) -> None:
         self._squares: dict[Square4D, Piece] = {}
-        # Undo record shape: (move, captured_piece_or_None).
-        self._undo: list[tuple[Move4D, Optional[Piece]]] = []
+        # Undo record shape: (move, captured_piece_or_None, original_mover).
+        # `original_mover` is the piece as it existed before the push; for
+        # promotions this differs from the piece now sitting on `to_sq`, so
+        # pop() needs the pre-push reference to restore pawn_axis intact.
+        self._undo: list[tuple[Move4D, Optional[Piece], Piece]] = []
 
     # --- state lookup --------------------------------------------------------
 
@@ -108,6 +125,9 @@ class Board4D:
         piece = self._squares.get(move.from_sq)
         if piece is None:
             raise IllegalMoveError(f"No piece on {move.from_sq}.")
+        if piece.piece_type is PieceType.PAWN:
+            self._push_pawn(move, piece)
+            return
         geometry = _PIECE_GEOMETRY.get(piece.piece_type)
         if geometry is None:
             raise IllegalMoveError(
@@ -131,7 +151,7 @@ class Board4D:
             del self._squares[move.to_sq]
         del self._squares[move.from_sq]
         self._squares[move.to_sq] = piece
-        self._undo.append((move, captured))
+        self._undo.append((move, captured, piece))
 
     def pop(self) -> Move4D:
         """Undo the most recent :meth:`push`.
@@ -139,9 +159,9 @@ class Board4D:
         Returns the move that was undone. Raises :class:`IndexError` if
         the undo stack is empty.
         """
-        move, captured = self._undo.pop()
-        piece = self._squares.pop(move.to_sq)
-        self._squares[move.from_sq] = piece
+        move, captured, original = self._undo.pop()
+        del self._squares[move.to_sq]
+        self._squares[move.from_sq] = original
         if captured is not None:
             self._squares[move.to_sq] = captured
         return move
@@ -174,6 +194,78 @@ class Board4D:
         raise IllegalMoveError(  # pragma: no cover — defensive, unreachable in practice
             f"No ray from {from_sq} contains {to_sq} (internal geometry error)."
         )
+
+    def _push_pawn(self, move: Move4D, pawn: Piece) -> None:
+        """Apply a pawn move (paper §3.10, Def 12-14).
+
+        Dispatched separately from sliders/leapers because pawn
+        geometry depends on ``(color, pawn_axis)`` and its move and
+        capture sets are disjoint (not a union). Promotion replaces the
+        pawn with a new piece of the mover's color; the undo stack
+        holds the original pawn so :meth:`pop` can restore it intact.
+        """
+        assert pawn.pawn_axis is not None  # guaranteed by Piece.__post_init__
+        color = pawn.color
+        axis = pawn.pawn_axis
+        key = (color, axis)
+        forward_targets = PAWN_FORWARD_MOVES[key][move.from_sq]
+        capture_targets = PAWN_CAPTURES[key][move.from_sq]
+
+        target = move.to_sq
+        captured = self._squares.get(target)
+
+        if target in forward_targets:
+            if captured is not None:
+                raise IllegalMoveError(
+                    f"Pawn forward move to {target} is blocked by {captured.piece_type.name}."
+                )
+            # Two-step must have an empty intermediate as well.
+            idx = forward_targets.index(target)
+            for intermediate in forward_targets[:idx]:
+                if intermediate in self._squares:
+                    raise IllegalMoveError(
+                        f"Pawn two-step from {move.from_sq} is blocked at {intermediate}."
+                    )
+        elif target in capture_targets:
+            if captured is None:
+                raise IllegalMoveError(
+                    f"Pawn capture to {target} requires an enemy piece."
+                )
+            if captured.color == color:
+                raise IllegalMoveError(
+                    f"{target} is occupied by a friendly {captured.piece_type.name}."
+                )
+        else:
+            raise IllegalMoveError(
+                f"{target} is not a pseudo-legal pawn destination from {move.from_sq}."
+            )
+
+        promotion_rank = PAWN_PROMOTION_RANK[key]
+        axis_index = int(axis)
+        is_promotion = target[axis_index] == promotion_rank
+        if is_promotion:
+            if move.promotion is None:
+                raise IllegalMoveError(
+                    f"Pawn reaching rank {promotion_rank} on axis {axis.name} must specify a promotion."
+                )
+            if move.promotion not in _PROMOTION_TYPES:
+                raise IllegalMoveError(
+                    f"Invalid promotion target {move.promotion.name}; "
+                    "must be QUEEN, ROOK, BISHOP, or KNIGHT."
+                )
+            placed: Piece = Piece(color=color, piece_type=move.promotion)
+        else:
+            if move.promotion is not None:
+                raise IllegalMoveError(
+                    f"Promotion specified on a non-promoting pawn move to {target}."
+                )
+            placed = pawn
+
+        if captured is not None:
+            del self._squares[target]
+        del self._squares[move.from_sq]
+        self._squares[target] = placed
+        self._undo.append((move, captured, pawn))
 
     # --- equality ------------------------------------------------------------
 

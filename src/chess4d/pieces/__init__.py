@@ -11,7 +11,15 @@ separately in :class:`~chess4d.board.Board4D`.
 from chess4d.pieces.bishop import bishop_moves
 from chess4d.pieces.king import king_moves
 from chess4d.pieces.knight import knight_moves
+from chess4d.pieces.pawn import pawn_moves
 from chess4d.pieces.queen import queen_moves
 from chess4d.pieces.rook import rook_moves
 
-__all__ = ["bishop_moves", "king_moves", "knight_moves", "queen_moves", "rook_moves"]
+__all__ = [
+    "bishop_moves",
+    "king_moves",
+    "knight_moves",
+    "pawn_moves",
+    "queen_moves",
+    "rook_moves",
+]

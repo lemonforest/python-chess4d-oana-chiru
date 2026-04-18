@@ -106,14 +106,6 @@ def test_push_empty_square_raises() -> None:
         board.push(Move4D(Square4D(0, 0, 0, 0), Square4D(1, 0, 0, 0)))
 
 
-def test_push_unsupported_piece_type_raises() -> None:
-    """Pawn is not yet registered in _PIECE_GEOMETRY, so push must refuse it."""
-    board = Board4D()
-    board.place(Square4D(0, 0, 0, 0), _white_pawn())
-    with pytest.raises(IllegalMoveError):
-        board.push(Move4D(Square4D(0, 0, 0, 0), Square4D(0, 1, 0, 0)))
-
-
 def test_push_rook_non_axis_move_raises() -> None:
     """A move changing two coordinates is not rook-reachable (§3.5 Theorem 2)."""
     board = Board4D()
