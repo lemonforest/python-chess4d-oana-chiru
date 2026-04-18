@@ -20,6 +20,14 @@ for 24 rays per square. Parity ``(x+y+z+w) mod 2`` is preserved by
 every bishop move (§3.7 Lemma 2), so the bishop graph has exactly two
 connected components (§3.7 Theorem 4).
 
+Queen geometry (§3.8 Definition 7)
+----------------------------------
+The queen's displacement set is the **union** of the rook's (1-axis)
+and the bishop's (2-axis). It is deliberately restricted to those two
+classes; 3- or 4-axis diagonals are not queen moves (§3.8 Def 7). The
+queen ray table is the per-square concatenation of the rook and bishop
+rays, lockstep with :data:`QUEEN_DIRECTIONS`.
+
 Ordering conventions (load-bearing for tests)
 ---------------------------------------------
 * :data:`ROOK_DIRECTIONS` / :data:`ROOK_RAYS` are indexed in lockstep.
@@ -155,4 +163,40 @@ BISHOP_NEIGHBORS: Mapping[Square4D, frozenset[Square4D]] = {
 Per §3.7 Lemma 2, every element of ``BISHOP_NEIGHBORS[sq]`` shares
 parity with ``sq``; per §3.7 Theorem 4, the graph has exactly two
 connected components of size ``8^4 / 2 = 2048`` each.
+"""
+
+
+# --- queen ------------------------------------------------------------------
+
+
+QUEEN_DIRECTIONS: Tuple[Displacement, ...] = ROOK_DIRECTIONS + BISHOP_DIRECTIONS
+"""The 32 queen displacements (paper §3.8 Definition 7).
+
+Concatenation of :data:`ROOK_DIRECTIONS` (8 axis-unit vectors) and
+:data:`BISHOP_DIRECTIONS` (24 planar-diagonal vectors). **Do not** add
+3- or 4-axis diagonals: §3.8 Def 7 restricts the queen to 1- and 2-axis
+moves, and extending it would collapse rook/bishop/queen into a single
+piece class.
+"""
+
+
+QUEEN_RAYS: Mapping[Square4D, tuple[tuple[Square4D, ...], ...]] = {
+    sq: ROOK_RAYS[sq] + BISHOP_RAYS[sq] for sq in ROOK_RAYS
+}
+"""Per-square queen rays, lockstep with :data:`QUEEN_DIRECTIONS`.
+
+``QUEEN_RAYS[sq][k]`` is the ordered list of squares hit from ``sq``
+along ``QUEEN_DIRECTIONS[k]``: axis rays for ``k < 8`` and planar-
+diagonal rays for ``8 ≤ k < 32``.
+"""
+
+
+QUEEN_NEIGHBORS: Mapping[Square4D, frozenset[Square4D]] = {
+    sq: ROOK_NEIGHBORS[sq] | BISHOP_NEIGHBORS[sq] for sq in ROOK_NEIGHBORS
+}
+"""Empty-board queen reach from every square (paper §3.8 Def 7).
+
+The rook and bishop reach sets are always disjoint (Hamming-1 vs
+Hamming-2 neighbors), so ``|QUEEN_NEIGHBORS[sq]|`` equals
+``|ROOK_NEIGHBORS[sq]| + |BISHOP_NEIGHBORS[sq]|`` exactly.
 """

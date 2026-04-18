@@ -20,6 +20,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Iterator
 
 from chess4d.geometry import BISHOP_RAYS
+from chess4d.pieces._common import slide_from
 from chess4d.types import Color, Move4D, Square4D
 
 if TYPE_CHECKING:
@@ -29,20 +30,8 @@ if TYPE_CHECKING:
 def bishop_moves(origin: Square4D, color: Color, board: "Board4D") -> Iterator[Move4D]:
     """Yield pseudo-legal bishop moves from ``origin`` for the given ``color``.
 
-    "Pseudo-legal" means the moves respect the bishop's displacement and
-    blocker/capture semantics (§3.7 Definition 6), but king-safety
-    (§3.4 Definition 3) is *not* checked — that lives in the legality
-    pipeline.
-
-    The caller is responsible for ensuring ``origin`` actually holds a
-    bishop of ``color``; this function does not re-verify that.
+    See :func:`chess4d.pieces._common.slide_from` for the shared slider
+    loop. The caller is responsible for ensuring ``origin`` actually
+    holds a bishop of ``color``; this function does not re-verify that.
     """
-    for ray in BISHOP_RAYS[origin]:
-        for target in ray:
-            occupant = board.occupant(target)
-            if occupant is None:
-                yield Move4D(from_sq=origin, to_sq=target)
-                continue
-            if occupant.color != color:
-                yield Move4D(from_sq=origin, to_sq=target)
-            break
+    return slide_from(BISHOP_RAYS, origin, color, board)
