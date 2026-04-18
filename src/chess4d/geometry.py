@@ -28,6 +28,15 @@ classes; 3- or 4-axis diagonals are not queen moves (§3.8 Def 7). The
 queen ray table is the per-square concatenation of the rook and bishop
 rays, lockstep with :data:`QUEEN_DIRECTIONS`.
 
+Knight geometry (§3.8 Definition 8, Theorem 3)
+----------------------------------------------
+The knight is a leaper: its 48 displacements are all permutations of
+``(±2, ±1, 0, 0)``. Intermediate squares do not exist — the knight
+"jumps." To keep the dispatch-table uniform with sliders, each knight
+ray is modeled as a length-0-or-1 tuple (0 when the target is out of
+bounds, 1 when it is in bounds). Empty-board mobility follows the §3.8
+Theorem 3 stratification formula.
+
 Ordering conventions (load-bearing for tests)
 ---------------------------------------------
 * :data:`ROOK_DIRECTIONS` / :data:`ROOK_RAYS` are indexed in lockstep.
@@ -199,4 +208,81 @@ QUEEN_NEIGHBORS: Mapping[Square4D, frozenset[Square4D]] = {
 The rook and bishop reach sets are always disjoint (Hamming-1 vs
 Hamming-2 neighbors), so ``|QUEEN_NEIGHBORS[sq]|`` equals
 ``|ROOK_NEIGHBORS[sq]| + |BISHOP_NEIGHBORS[sq]|`` exactly.
+"""
+
+
+# --- knight -----------------------------------------------------------------
+
+
+def _build_knight_displacements() -> Tuple[Displacement, ...]:
+    """All 48 permutations of ``(±2, ±1, 0, 0)`` (paper §3.8 Def 8).
+
+    Deterministic order: outer loop over ordered pairs ``(i, j)`` of
+    distinct axes (``i`` = axis for ±2, ``j`` = axis for ±1); inner loop
+    over sign combinations ``((+2,+1), (+2,-1), (-2,+1), (-2,-1))``.
+    12 ordered axis pairs × 4 sign combinations = 48.
+    """
+    result: list[Displacement] = []
+    for i in range(4):
+        for j in range(4):
+            if i == j:
+                continue
+            for s2, s1 in ((+2, +1), (+2, -1), (-2, +1), (-2, -1)):
+                vec = [0, 0, 0, 0]
+                vec[i] = s2
+                vec[j] = s1
+                result.append((vec[0], vec[1], vec[2], vec[3]))
+    return tuple(result)
+
+
+KNIGHT_DISPLACEMENTS: Tuple[Displacement, ...] = _build_knight_displacements()
+"""The 48 knight displacements (paper §3.8 Definition 8, Theorem 3).
+
+Each entry is a permutation of ``(±2, ±1, 0, 0)``: one axis carries
+``±2``, a different axis carries ``±1``, the remaining two are zero.
+"""
+
+
+def _leaper_ray(origin: Square4D, displacement: Displacement) -> tuple[Square4D, ...]:
+    """One-step leaper "ray": a single-element tuple if in bounds, else empty.
+
+    Uniform shape with slider rays lets :meth:`Board4D._walk_ray_or_raise`
+    handle leapers without special-casing (there are simply no
+    intermediate squares to scan).
+    """
+    target = Square4D(
+        origin.x + displacement[0],
+        origin.y + displacement[1],
+        origin.z + displacement[2],
+        origin.w + displacement[3],
+    )
+    return (target,) if target.in_bounds() else ()
+
+
+def _build_knight_rays() -> dict[Square4D, tuple[tuple[Square4D, ...], ...]]:
+    return {
+        Square4D(x, y, z, w): tuple(
+            _leaper_ray(Square4D(x, y, z, w), d) for d in KNIGHT_DISPLACEMENTS
+        )
+        for x, y, z, w in itertools.product(range(BOARD_SIZE), repeat=4)
+    }
+
+
+KNIGHT_RAYS: Mapping[Square4D, tuple[tuple[Square4D, ...], ...]] = _build_knight_rays()
+"""Per-square knight rays, lockstep with :data:`KNIGHT_DISPLACEMENTS`.
+
+Leaper shape: each ray is either empty (target out of bounds) or a
+one-element tuple containing the single jump target. Intermediate
+squares do not exist, so ray-walk validation in
+:meth:`Board4D._walk_ray_or_raise` no-ops for knight moves.
+"""
+
+
+KNIGHT_NEIGHBORS: Mapping[Square4D, frozenset[Square4D]] = {
+    sq: frozenset(t for ray in rays for t in ray) for sq, rays in KNIGHT_RAYS.items()
+}
+"""Empty-board knight reach from every square (paper §3.8 Theorem 3).
+
+Interior mobility is uniformly 48 on ``{2,…,5}^4``; boundary-clipped
+elsewhere by the §3.8 Theorem 3 closed-form stratification.
 """

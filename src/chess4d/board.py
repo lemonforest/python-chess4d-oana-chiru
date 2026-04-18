@@ -21,6 +21,8 @@ from chess4d.errors import IllegalMoveError
 from chess4d.geometry import (
     BISHOP_NEIGHBORS,
     BISHOP_RAYS,
+    KNIGHT_NEIGHBORS,
+    KNIGHT_RAYS,
     QUEEN_NEIGHBORS,
     QUEEN_RAYS,
     ROOK_NEIGHBORS,
@@ -36,6 +38,7 @@ _PIECE_GEOMETRY: dict[PieceType, tuple[_RaysMap, _NeighborsMap]] = {
     PieceType.ROOK: (ROOK_RAYS, ROOK_NEIGHBORS),
     PieceType.BISHOP: (BISHOP_RAYS, BISHOP_NEIGHBORS),
     PieceType.QUEEN: (QUEEN_RAYS, QUEEN_NEIGHBORS),
+    PieceType.KNIGHT: (KNIGHT_RAYS, KNIGHT_NEIGHBORS),
 }
 """Dispatch table from :class:`PieceType` to ``(RAYS, NEIGHBORS)`` mappings.
 
