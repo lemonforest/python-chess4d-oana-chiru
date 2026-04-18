@@ -1,4 +1,4 @@
-# chess4d
+# python-chess4d-oana-chiru
 
 Python reference implementation of:
 
