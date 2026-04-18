@@ -1,0 +1,74 @@
+"""chess4d — Python reference implementation of Oana & Chiru (2026).
+
+Paper
+-----
+Oana & Chiru, *A Mathematical Framework for Four-Dimensional Chess*,
+MDPI AppliedMath 6(3):48, 2026. DOI 10.3390/appliedmath6030048.
+The source document lives at ``hoodoos/oana-chiru-2026.xml`` and is the
+authoritative spec for this package; section numbers referenced in
+docstrings refer to that document.
+
+Coordinate convention
+---------------------
+0-based internally (0..7 per axis), matching the reference UI described
+in the paper. The paper's 1-based ``{1,…,8}^4`` notation is preserved in
+docstrings for readability; conversion happens only at the UI boundary.
+"""
+
+from chess4d.board import Board4D
+from chess4d.errors import IllegalMoveError
+from chess4d.legality import (
+    any_king_attacked,
+    in_check,
+    is_attacked,
+    kings_of,
+)
+from chess4d.pieces import (
+    bishop_moves,
+    king_moves,
+    knight_moves,
+    pawn_moves,
+    queen_moves,
+    rook_moves,
+)
+from chess4d.startpos import initial_position
+from chess4d.state import GameState
+from chess4d.zobrist import hash_position
+from chess4d.types import (
+    BOARD_SIZE,
+    CastleSide,
+    CastlingRight,
+    Color,
+    Move4D,
+    PawnAxis,
+    Piece,
+    PieceType,
+    Square4D,
+)
+
+__all__ = [
+    "BOARD_SIZE",
+    "Board4D",
+    "CastleSide",
+    "CastlingRight",
+    "Color",
+    "GameState",
+    "IllegalMoveError",
+    "Move4D",
+    "PawnAxis",
+    "Piece",
+    "PieceType",
+    "Square4D",
+    "any_king_attacked",
+    "bishop_moves",
+    "hash_position",
+    "in_check",
+    "initial_position",
+    "is_attacked",
+    "king_moves",
+    "kings_of",
+    "knight_moves",
+    "pawn_moves",
+    "queen_moves",
+    "rook_moves",
+]
