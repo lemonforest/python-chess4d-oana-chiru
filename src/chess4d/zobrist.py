@@ -19,9 +19,14 @@ repetition rule, which ignores the 50-move clock).
 
 Tables are built once at import time from a fixed seed
 (:data:`_SEED`) so hashes are stable across processes and across runs.
-The library uses the naive ``O(pieces)`` hash here; an incremental
-``O(1)`` hash maintained on :meth:`GameState.push`/``.pop`` is deferred
-to Phase 6.
+:func:`hash_position` is the public full-recomputation entry point and
+remains ``O(pieces)``; Phase 6B added incremental ``O(1)`` updates on
+:meth:`GameState.push` / :meth:`GameState.pop` by exposing the raw
+tables (:data:`PIECE_HASH_TABLE`, :data:`SIDE_HASH`,
+:data:`CASTLING_HASH_TABLE`, :data:`EP_HASH_TABLE`) for XOR-based
+delta maintenance. The public function is unchanged so external
+callers still get a full recomputation; internal hot paths read
+:attr:`~chess4d.state.GameState._incremental_hash` directly.
 """
 
 from __future__ import annotations
@@ -116,6 +121,35 @@ def _build_tables() -> tuple[
 
 _PIECE_HASHES, _SIDE_HASH, _CASTLING_HASHES, _EP_HASHES = _build_tables()
 
+PIECE_HASH_TABLE: dict[tuple[Square4D, Piece], int] = _PIECE_HASHES
+"""``(square, piece) → 64-bit draw`` table (paper §4.7).
+
+Exposed for :class:`~chess4d.state.GameState`'s incremental hash
+maintenance (Phase 6B): each push XORs out the pre-change placements
+and XORs in the post-change placements, avoiding the ``O(pieces)``
+iteration in :func:`hash_position`. External callers should continue
+to use :func:`hash_position`.
+"""
+
+SIDE_HASH: int = _SIDE_HASH
+"""Bitstring XORed into the hash iff black is to move (paper §4.7).
+
+Exposed for incremental maintenance; toggled on every push/pop.
+"""
+
+CASTLING_HASH_TABLE: dict[CastlingRight, int] = _CASTLING_HASHES
+"""``CastlingRight → bitstring`` table (paper §4.7, §3.9 Def 10).
+
+Exposed for incremental maintenance; each revoked right is XORed out.
+"""
+
+EP_HASH_TABLE: dict[Square4D, int] = _EP_HASHES
+"""``Square4D → bitstring`` for en-passant targets (paper §4.7, §3.10).
+
+Exposed for incremental maintenance; the old ep target (if any) is
+XORed out and the new (if any) is XORed in.
+"""
+
 
 def hash_position(gs: "GameState") -> int:
     """Return the 64-bit Zobrist hash of ``gs``.
@@ -125,6 +159,12 @@ def hash_position(gs: "GameState") -> int:
     rights, and en-passant target. The halfmove clock, position
     history, and undo stack are deliberately excluded — they do not
     affect position identity for repetition purposes.
+
+    This is the full ``O(pieces)`` computation and the authoritative
+    oracle. Internally :class:`~chess4d.state.GameState` maintains an
+    incremental equivalent in ``_incremental_hash`` and uses that for
+    hot-path queries (history append, threefold); calling
+    ``hash_position`` on a well-formed state returns the same value.
     """
     h = 0
     for color in Color:

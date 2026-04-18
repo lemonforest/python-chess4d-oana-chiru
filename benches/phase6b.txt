@@ -1,0 +1,9 @@
+=== legal_moves() ===
+S1 initial (white)                               median= 15873.0ms  max= 16739.0ms  moves=2356
+S2 after 1 ply (black)                           median= 15660.9ms  max= 17055.1ms  moves=2356
+S3 mid-game ~200 pieces                          median= 10734.1ms  max= 10847.6ms  moves=2151
+S4 near-mate                                     median=     7.2ms  max=    12.1ms  moves=18
+S5 single rook                                   median=     0.5ms  max=     0.6ms  moves=28
+
+=== push+pop ===
+P1 initial position                              median=   7.940ms  max=  11.643ms

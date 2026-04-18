@@ -33,7 +33,13 @@ from typing import Iterator, Optional
 from chess4d.board import Board4D
 from chess4d.errors import IllegalMoveError
 from chess4d.legality import _all_pseudo_legal_moves, any_king_attacked, is_attacked
-from chess4d.zobrist import hash_position
+from chess4d.zobrist import (
+    CASTLING_HASH_TABLE,
+    EP_HASH_TABLE,
+    PIECE_HASH_TABLE,
+    SIDE_HASH,
+    hash_position,
+)
 from chess4d.types import (
     BOARD_SIZE,
     CastleSide,
@@ -68,6 +74,7 @@ class _GameStateUndo:
     prior_ep_victim: Optional[Square4D]
     prior_ep_axis: Optional[PawnAxis]
     prior_halfmove_clock: int
+    prior_incremental_hash: int
     is_castling_compound: bool
     ep_capture_restore: Optional[tuple[Square4D, Piece]]
 
@@ -183,20 +190,27 @@ class GameState:
     halfmove_clock: int = 0
     position_history: list[int] = field(default_factory=list, repr=False)
     _undo: list[_GameStateUndo] = field(default_factory=list, repr=False)
+    _incremental_hash: int = field(default=0, repr=False)
 
     __hash__ = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
-        """Seed :attr:`position_history` with the current-state hash.
+        """Seed :attr:`position_history` and :attr:`_incremental_hash`.
 
         Threefold repetition (§4.7) counts exact occurrences of the
         current position hash; the starting state must count as the
         first occurrence, so a freshly-constructed game always has
         exactly one entry in the history. Callers passing a
         pre-populated history (e.g. game replay) are respected as-is.
+
+        ``_incremental_hash`` is seeded from :func:`hash_position` and
+        is thereafter maintained by :meth:`push` / :meth:`pop` as an
+        XOR delta (Phase 6B), so full recomputation happens once per
+        :class:`GameState` instance rather than once per ply.
         """
+        self._incremental_hash = hash_position(self)
         if not self.position_history:
-            self.position_history.append(hash_position(self))
+            self.position_history.append(self._incremental_hash)
 
     def push(self, move: Move4D) -> None:
         """Apply ``move`` with full legality enforcement (§3.4 Def 3).
@@ -237,8 +251,14 @@ class GameState:
                 f"Move {move} leaves a {self.side_to_move.name} king in check "
                 "(§3.4 Def 3, Remark 1)."
             )
+        placed = self.board.occupant(move.to_sq)  # may differ from `piece` on promotion
+        assert placed is not None
         new_ep_target, new_ep_victim, new_ep_axis = _compute_new_ep_state(piece, move)
         resets_clock = piece.piece_type is PieceType.PAWN or captured is not None
+        prior_hash = self._incremental_hash
+        new_rights = _revoke_rights_for_move(
+            self.castling_rights, move, piece, captured
+        )
         self._undo.append(
             _GameStateUndo(
                 prior_castling_rights=self.castling_rights,
@@ -246,19 +266,31 @@ class GameState:
                 prior_ep_victim=self.ep_victim,
                 prior_ep_axis=self.ep_axis,
                 prior_halfmove_clock=self.halfmove_clock,
+                prior_incremental_hash=prior_hash,
                 is_castling_compound=False,
                 ep_capture_restore=None,
             )
         )
-        self.castling_rights = _revoke_rights_for_move(
-            self.castling_rights, move, piece, captured
-        )
+        h = prior_hash
+        h ^= PIECE_HASH_TABLE[(move.from_sq, piece)]
+        h ^= PIECE_HASH_TABLE[(move.to_sq, placed)]
+        if captured is not None:
+            h ^= PIECE_HASH_TABLE[(move.to_sq, captured)]
+        h ^= SIDE_HASH
+        for right in self.castling_rights - new_rights:
+            h ^= CASTLING_HASH_TABLE[right]
+        if self.ep_target is not None:
+            h ^= EP_HASH_TABLE[self.ep_target]
+        if new_ep_target is not None:
+            h ^= EP_HASH_TABLE[new_ep_target]
+        self._incremental_hash = h
+        self.castling_rights = new_rights
         self.ep_target = new_ep_target
         self.ep_victim = new_ep_victim
         self.ep_axis = new_ep_axis
         self.halfmove_clock = 0 if resets_clock else self.halfmove_clock + 1
         self.side_to_move = Color(1 - self.side_to_move)
-        self.position_history.append(hash_position(self))
+        self.position_history.append(self._incremental_hash)
 
     def _push_castling(self, move: Move4D, king: Piece) -> None:
         """Validate and apply a castling move (§3.9 Def 10).
@@ -365,6 +397,10 @@ class GameState:
                 f"Castling leaves a {king.color.name} king in check "
                 "(§3.4 Def 3, Remark 1)."
             )
+        prior_hash = self._incremental_hash
+        new_rights = frozenset(
+            r for r in self.castling_rights if r[:3] != (king.color, z, w)
+        )
         self._undo.append(
             _GameStateUndo(
                 prior_castling_rights=self.castling_rights,
@@ -372,21 +408,32 @@ class GameState:
                 prior_ep_victim=self.ep_victim,
                 prior_ep_axis=self.ep_axis,
                 prior_halfmove_clock=self.halfmove_clock,
+                prior_incremental_hash=prior_hash,
                 is_castling_compound=True,
                 ep_capture_restore=None,
             )
         )
+        h = prior_hash
+        # King A → B and rook C → D. Neither piece changes type.
+        h ^= PIECE_HASH_TABLE[(move.from_sq, king)]
+        h ^= PIECE_HASH_TABLE[(move.to_sq, king)]
+        h ^= PIECE_HASH_TABLE[(rook_from, rook_piece)]
+        h ^= PIECE_HASH_TABLE[(rook_to, rook_piece)]
+        h ^= SIDE_HASH
+        for right in self.castling_rights - new_rights:
+            h ^= CASTLING_HASH_TABLE[right]
+        if self.ep_target is not None:
+            h ^= EP_HASH_TABLE[self.ep_target]
+        self._incremental_hash = h
         # Revoke both rights on this (color, z, w) slice.
-        self.castling_rights = frozenset(
-            r for r in self.castling_rights if r[:3] != (king.color, z, w)
-        )
+        self.castling_rights = new_rights
         self.ep_target = None
         self.ep_victim = None
         self.ep_axis = None
         # Castling is neither a pawn move nor a capture — clock ticks.
         self.halfmove_clock += 1
         self.side_to_move = Color(1 - self.side_to_move)
-        self.position_history.append(hash_position(self))
+        self.position_history.append(self._incremental_hash)
 
     def _push_en_passant(self, move: Move4D, pawn: Piece) -> None:
         """Validate and apply an en-passant capture (paper §3.10 Def 15).
@@ -455,6 +502,7 @@ class GameState:
                 f"En-passant move {move} leaves a {self.side_to_move.name} "
                 "king in check (§3.4 Def 3, Remark 1)."
             )
+        prior_hash = self._incremental_hash
         self._undo.append(
             _GameStateUndo(
                 prior_castling_rights=self.castling_rights,
@@ -462,17 +510,29 @@ class GameState:
                 prior_ep_victim=self.ep_victim,
                 prior_ep_axis=self.ep_axis,
                 prior_halfmove_clock=self.halfmove_clock,
+                prior_incremental_hash=prior_hash,
                 is_castling_compound=False,
                 ep_capture_restore=(v, victim_piece),
             )
         )
+        h = prior_hash
+        # Capturer pawn moves from from_sq → to_sq (no promotion on ep),
+        # victim is removed from its own square v.
+        h ^= PIECE_HASH_TABLE[(move.from_sq, pawn)]
+        h ^= PIECE_HASH_TABLE[(move.to_sq, pawn)]
+        h ^= PIECE_HASH_TABLE[(v, victim_piece)]
+        h ^= SIDE_HASH
+        # Castling rights don't change on ep. Ep target clears.
+        assert self.ep_target is not None
+        h ^= EP_HASH_TABLE[self.ep_target]
+        self._incremental_hash = h
         self.ep_target = None
         self.ep_victim = None
         self.ep_axis = None
         # Pawn move AND capture — either alone would reset the clock.
         self.halfmove_clock = 0
         self.side_to_move = Color(1 - self.side_to_move)
-        self.position_history.append(hash_position(self))
+        self.position_history.append(self._incremental_hash)
 
     def pop(self) -> Move4D:
         """Undo the most recent :meth:`push`, restoring all game-level state.
@@ -498,6 +558,7 @@ class GameState:
         self.ep_victim = undo_entry.prior_ep_victim
         self.ep_axis = undo_entry.prior_ep_axis
         self.halfmove_clock = undo_entry.prior_halfmove_clock
+        self._incremental_hash = undo_entry.prior_incremental_hash
         self.side_to_move = Color(1 - self.side_to_move)
         return move
 
@@ -614,7 +675,7 @@ class GameState:
         Like :meth:`is_fifty_move_draw`, this is a claim predicate, not
         an automatic draw — callers decide whether to honor it.
         """
-        current = hash_position(self)
+        current = self._incremental_hash
         return self.position_history.count(current) >= 3
 
     def is_fifty_move_draw(self) -> bool:
