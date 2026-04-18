@@ -33,6 +33,7 @@ from chess4d.pieces import (
 )
 from chess4d.startpos import initial_position
 from chess4d.state import GameState
+from chess4d.zobrist import hash_position
 from chess4d.types import (
     BOARD_SIZE,
     CastleSide,
@@ -60,6 +61,7 @@ __all__ = [
     "Square4D",
     "any_king_attacked",
     "bishop_moves",
+    "hash_position",
     "in_check",
     "initial_position",
     "is_attacked",

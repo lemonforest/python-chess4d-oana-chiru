@@ -8,10 +8,15 @@ placement alone:
 * ``castling_rights`` — per-``(color, z, w, side)`` castling eligibility
   (Phase 5A, §3.9 Def 10).
 
-Subsequent Phase 5 sub-phases add the en-passant target, halfmove
-clock, and position-history hash. All of those live here (game-level),
-not on :class:`Board4D` which stays at the placement-plus-pseudo-legal
-push/pop layer.
+* ``ep_target`` / ``ep_victim`` / ``ep_axis`` — transient en-passant
+  capture state (Phase 5B, §3.10 Def 15).
+* ``halfmove_clock`` — plies since the last pawn move or capture,
+  backing :meth:`is_fifty_move_draw` (Phase 5C).
+* ``position_history`` — Zobrist hashes of each position seen so far,
+  backing :meth:`is_threefold_repetition` (Phase 5D, §4.7).
+
+All of those live here (game-level), not on :class:`Board4D` which
+stays at the placement-plus-pseudo-legal push/pop layer.
 
 The legality filter (§3.4 Def 3) lives in :meth:`GameState.push` and
 :meth:`GameState.legal_moves`: a move is legal iff, after application,
@@ -28,6 +33,7 @@ from typing import Iterator, Optional
 from chess4d.board import Board4D
 from chess4d.errors import IllegalMoveError
 from chess4d.legality import _all_pseudo_legal_moves, any_king_attacked, is_attacked
+from chess4d.zobrist import hash_position
 from chess4d.types import (
     BOARD_SIZE,
     CastleSide,
@@ -175,9 +181,22 @@ class GameState:
     ep_victim: Optional[Square4D] = None
     ep_axis: Optional[PawnAxis] = None
     halfmove_clock: int = 0
+    position_history: list[int] = field(default_factory=list, repr=False)
     _undo: list[_GameStateUndo] = field(default_factory=list, repr=False)
 
     __hash__ = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        """Seed :attr:`position_history` with the current-state hash.
+
+        Threefold repetition (§4.7) counts exact occurrences of the
+        current position hash; the starting state must count as the
+        first occurrence, so a freshly-constructed game always has
+        exactly one entry in the history. Callers passing a
+        pre-populated history (e.g. game replay) are respected as-is.
+        """
+        if not self.position_history:
+            self.position_history.append(hash_position(self))
 
     def push(self, move: Move4D) -> None:
         """Apply ``move`` with full legality enforcement (§3.4 Def 3).
@@ -239,6 +258,7 @@ class GameState:
         self.ep_axis = new_ep_axis
         self.halfmove_clock = 0 if resets_clock else self.halfmove_clock + 1
         self.side_to_move = Color(1 - self.side_to_move)
+        self.position_history.append(hash_position(self))
 
     def _push_castling(self, move: Move4D, king: Piece) -> None:
         """Validate and apply a castling move (§3.9 Def 10).
@@ -366,6 +386,7 @@ class GameState:
         # Castling is neither a pawn move nor a capture — clock ticks.
         self.halfmove_clock += 1
         self.side_to_move = Color(1 - self.side_to_move)
+        self.position_history.append(hash_position(self))
 
     def _push_en_passant(self, move: Move4D, pawn: Piece) -> None:
         """Validate and apply an en-passant capture (paper §3.10 Def 15).
@@ -451,6 +472,7 @@ class GameState:
         # Pawn move AND capture — either alone would reset the clock.
         self.halfmove_clock = 0
         self.side_to_move = Color(1 - self.side_to_move)
+        self.position_history.append(hash_position(self))
 
     def pop(self) -> Move4D:
         """Undo the most recent :meth:`push`, restoring all game-level state.
@@ -462,6 +484,7 @@ class GameState:
         same failure mode as :meth:`Board4D.pop`.
         """
         undo_entry = self._undo.pop()
+        self.position_history.pop()
         if undo_entry.is_castling_compound:
             self.board.pop()  # rook move
             move = self.board.pop()  # king move
@@ -579,6 +602,20 @@ class GameState:
         Paper §3.4 Def 5 (stalemate branch).
         """
         return not self.in_check() and not any(self.legal_moves())
+
+    def is_threefold_repetition(self) -> bool:
+        """Return ``True`` iff the current position has occurred 3+ times.
+
+        Paper §4.7 inherits FIDE's threefold-repetition rule: a position
+        is determined by piece placement, side-to-move, castling
+        rights, and en-passant target — the halfmove clock does not
+        affect repetition identity (see :func:`chess4d.zobrist.hash_position`).
+
+        Like :meth:`is_fifty_move_draw`, this is a claim predicate, not
+        an automatic draw — callers decide whether to honor it.
+        """
+        current = hash_position(self)
+        return self.position_history.count(current) >= 3
 
     def is_fifty_move_draw(self) -> bool:
         """Return ``True`` iff the halfmove clock has reached 100 plies.
