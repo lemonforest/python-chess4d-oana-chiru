@@ -15,7 +15,7 @@ legality pipeline in a later deliverable.
 
 from __future__ import annotations
 
-from typing import Mapping, Optional
+from typing import Iterator, Mapping, Optional
 
 from chess4d.errors import IllegalMoveError
 from chess4d.geometry import (
@@ -33,7 +33,7 @@ from chess4d.geometry import (
     ROOK_NEIGHBORS,
     ROOK_RAYS,
 )
-from chess4d.types import Move4D, Piece, PieceType, Square4D
+from chess4d.types import Color, Move4D, Piece, PieceType, Square4D
 
 _RaysMap = Mapping[Square4D, tuple[tuple[Square4D, ...], ...]]
 _NeighborsMap = Mapping[Square4D, frozenset[Square4D]]
@@ -105,6 +105,15 @@ class Board4D:
     def remove(self, sq: Square4D) -> Piece:
         """Remove and return the piece at ``sq``. Raises :class:`KeyError` if empty."""
         return self._squares.pop(sq)
+
+    def pieces_of(self, color: Color) -> Iterator[tuple[Square4D, Piece]]:
+        """Yield every ``(square, piece)`` pair whose piece has ``color``.
+
+        Order is unspecified; callers must not rely on it. Used by the
+        legality pipeline to enumerate candidate attackers and movers
+        without touching the internal placement dict.
+        """
+        return ((sq, p) for sq, p in self._squares.items() if p.color == color)
 
     # --- move application ----------------------------------------------------
 

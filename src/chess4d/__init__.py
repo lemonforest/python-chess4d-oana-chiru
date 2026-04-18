@@ -17,6 +17,12 @@ docstrings for readability; conversion happens only at the UI boundary.
 
 from chess4d.board import Board4D
 from chess4d.errors import IllegalMoveError
+from chess4d.legality import (
+    any_king_attacked,
+    in_check,
+    is_attacked,
+    kings_of,
+)
 from chess4d.pieces import (
     bishop_moves,
     king_moves,
@@ -45,8 +51,12 @@ __all__ = [
     "Piece",
     "PieceType",
     "Square4D",
+    "any_king_attacked",
     "bishop_moves",
+    "in_check",
+    "is_attacked",
     "king_moves",
+    "kings_of",
     "knight_moves",
     "pawn_moves",
     "queen_moves",

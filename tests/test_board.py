@@ -91,3 +91,46 @@ def test_boards_with_different_pieces_are_not_equal() -> None:
     a.place(sq, _white_rook())
     b.place(sq, _black_rook())
     assert a != b
+
+
+# --- pieces_of ---------------------------------------------------------------
+
+
+def test_pieces_of_empty_board_yields_nothing() -> None:
+    board = Board4D()
+    assert list(board.pieces_of(Color.WHITE)) == []
+    assert list(board.pieces_of(Color.BLACK)) == []
+
+
+def test_pieces_of_filters_by_color() -> None:
+    board = Board4D()
+    white_sq = Square4D(0, 0, 0, 0)
+    black_sq = Square4D(7, 7, 7, 7)
+    white_rook = _white_rook()
+    black_rook = _black_rook()
+    board.place(white_sq, white_rook)
+    board.place(black_sq, black_rook)
+    white_pairs = list(board.pieces_of(Color.WHITE))
+    black_pairs = list(board.pieces_of(Color.BLACK))
+    assert white_pairs == [(white_sq, white_rook)]
+    assert black_pairs == [(black_sq, black_rook)]
+
+
+def test_pieces_of_returns_all_matching_color() -> None:
+    board = Board4D()
+    squares = [Square4D(0, 0, 0, 0), Square4D(1, 1, 1, 1), Square4D(2, 2, 2, 2)]
+    for sq in squares:
+        board.place(sq, _white_rook())
+    board.place(Square4D(7, 7, 7, 7), _black_rook())
+    white_squares = {sq for sq, _ in board.pieces_of(Color.WHITE)}
+    assert white_squares == set(squares)
+
+
+def test_pieces_of_mixed_types_filters_only_by_color() -> None:
+    """``pieces_of`` returns pieces regardless of type, filtering only by color."""
+    board = Board4D()
+    board.place(Square4D(0, 0, 0, 0), Piece(Color.WHITE, PieceType.ROOK))
+    board.place(Square4D(1, 0, 0, 0), Piece(Color.WHITE, PieceType.KING))
+    board.place(Square4D(2, 0, 0, 0), Piece(Color.WHITE, PieceType.QUEEN))
+    piece_types = {p.piece_type for _, p in board.pieces_of(Color.WHITE)}
+    assert piece_types == {PieceType.ROOK, PieceType.KING, PieceType.QUEEN}
