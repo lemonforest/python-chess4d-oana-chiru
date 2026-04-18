@@ -1,10 +1,11 @@
 """Per-piece move generators (paper §3.5, §3.7–§3.10).
 
-Deliverable 2 implements :mod:`chess4d.pieces.rook`. The remaining piece
-modules are stubs that cite their paper definitions; their generators
-will land in later deliverables.
+Phase 1 shipped :mod:`chess4d.pieces.rook`; Phase 2 adds
+:mod:`chess4d.pieces.bishop`. The remaining modules are stubs citing
+their paper definitions; their generators land in later phases.
 """
 
+from chess4d.pieces.bishop import bishop_moves
 from chess4d.pieces.rook import rook_moves
 
-__all__ = ["rook_moves"]
+__all__ = ["bishop_moves", "rook_moves"]

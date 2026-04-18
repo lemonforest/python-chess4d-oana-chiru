@@ -5,20 +5,41 @@ Piece-list representation: occupied coordinates are stored in a
 initial position has only ~896 pieces (paper §3.3) and most cells are
 empty throughout the game.
 
-Deliverable 2 scope: construction, occupancy lookup, ``place`` /
-``remove`` mutators, structural equality, and rook-only ``push`` /
-``pop`` with an undo stack. Side-to-move, castling rights, en-passant
+``push`` / ``pop`` accept moves for every piece type registered in
+:data:`_PIECE_GEOMETRY`. Phase 1 registered the rook; Phase 2 adds the
+bishop. Other piece types raise :class:`~chess4d.errors.IllegalMoveError`
+until their own phase lands. Side-to-move, castling rights, en-passant
 target, half-move clock, and the repetition hash arrive with the
 legality pipeline in a later deliverable.
 """
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Mapping, Optional
 
 from chess4d.errors import IllegalMoveError
-from chess4d.geometry import ROOK_NEIGHBORS
+from chess4d.geometry import (
+    BISHOP_NEIGHBORS,
+    BISHOP_RAYS,
+    ROOK_NEIGHBORS,
+    ROOK_RAYS,
+)
 from chess4d.types import Move4D, Piece, PieceType, Square4D
+
+_RaysMap = Mapping[Square4D, tuple[tuple[Square4D, ...], ...]]
+_NeighborsMap = Mapping[Square4D, frozenset[Square4D]]
+
+
+_PIECE_GEOMETRY: dict[PieceType, tuple[_RaysMap, _NeighborsMap]] = {
+    PieceType.ROOK: (ROOK_RAYS, ROOK_NEIGHBORS),
+    PieceType.BISHOP: (BISHOP_RAYS, BISHOP_NEIGHBORS),
+}
+"""Dispatch table from :class:`PieceType` to ``(RAYS, NEIGHBORS)`` mappings.
+
+Adding a new piece type is purely additive: register an entry here
+(leapers use singleton rays) and :meth:`Board4D.push` picks it up
+without any branching change.
+"""
 
 
 class Board4D:
@@ -64,13 +85,12 @@ class Board4D:
     def push(self, move: Move4D) -> None:
         """Apply ``move`` to the board (paper §3.4, ``s' = apply(m, s)``).
 
-        Deliverable 2 only supports rook moves. Raises
-        :class:`~chess4d.errors.IllegalMoveError` if:
+        Raises :class:`~chess4d.errors.IllegalMoveError` if:
 
         * ``move.from_sq`` is empty;
-        * the moving piece is not a rook (D2 limitation);
-        * ``move.to_sq`` is not empty-board reachable by a rook from
-          ``move.from_sq`` (i.e. not a single-coordinate neighbor, §3.5);
+        * the moving piece's type is not yet registered in
+          :data:`_PIECE_GEOMETRY`;
+        * ``move.to_sq`` is not empty-board reachable for that piece type;
         * any intervening square along the ray is occupied;
         * ``move.to_sq`` holds a friendly piece.
 
@@ -79,15 +99,18 @@ class Board4D:
         piece = self._squares.get(move.from_sq)
         if piece is None:
             raise IllegalMoveError(f"No piece on {move.from_sq}.")
-        if piece.piece_type is not PieceType.ROOK:
+        geometry = _PIECE_GEOMETRY.get(piece.piece_type)
+        if geometry is None:
             raise IllegalMoveError(
-                f"Only rook moves are supported in Deliverable 2; got {piece.piece_type.name}."
+                f"{piece.piece_type.name} moves are not yet supported in this phase."
             )
-        if move.to_sq not in ROOK_NEIGHBORS[move.from_sq]:
+        rays, neighbors = geometry
+        if move.to_sq not in neighbors[move.from_sq]:
             raise IllegalMoveError(
-                f"{move.to_sq} is not rook-reachable from {move.from_sq} (paper §3.5)."
+                f"{move.to_sq} is not reachable by {piece.piece_type.name} "
+                f"from {move.from_sq}."
             )
-        self._walk_ray_or_raise(move.from_sq, move.to_sq)
+        self._walk_ray_or_raise(rays, move.from_sq, move.to_sq)
 
         captured = self._squares.get(move.to_sq)
         if captured is not None and captured.color == piece.color:
@@ -95,7 +118,6 @@ class Board4D:
                 f"{move.to_sq} is occupied by a friendly {captured.piece_type.name}."
             )
 
-        # Apply: move the piece, capturing if the target has an opponent.
         if captured is not None:
             del self._squares[move.to_sq]
         del self._squares[move.from_sq]
@@ -117,24 +139,32 @@ class Board4D:
 
     # --- helpers -------------------------------------------------------------
 
-    def _walk_ray_or_raise(self, from_sq: Square4D, to_sq: Square4D) -> None:
-        """Confirm the straight ray from ``from_sq`` to ``to_sq`` (exclusive of
-        both endpoints) is empty. Caller must have already verified the two
-        squares are rook-reachable (single-axis difference)."""
-        # Exactly one axis differs (guaranteed by the ROOK_NEIGHBORS check).
-        delta = (to_sq.x - from_sq.x, to_sq.y - from_sq.y,
-                 to_sq.z - from_sq.z, to_sq.w - from_sq.w)
-        axis = next(i for i, d in enumerate(delta) if d != 0)
-        step = 1 if delta[axis] > 0 else -1
-        distance = abs(delta[axis])
-        for k in range(1, distance):
-            coords = list(from_sq)
-            coords[axis] += k * step
-            intermediate = Square4D(*coords)
-            if intermediate in self._squares:
-                raise IllegalMoveError(
-                    f"Ray from {from_sq} to {to_sq} is blocked at {intermediate}."
-                )
+    def _walk_ray_or_raise(
+        self, rays: _RaysMap, from_sq: Square4D, to_sq: Square4D
+    ) -> None:
+        """Find the ray in ``rays[from_sq]`` containing ``to_sq`` and verify
+        that every square strictly between them is empty.
+
+        Caller has already checked reachability via the ``_NEIGHBORS``
+        mapping, so ``to_sq`` is guaranteed to be on some ray; the
+        final ``raise`` is defensive and indicates an internal
+        inconsistency between the rays and neighbors tables.
+        """
+        for ray in rays[from_sq]:
+            if to_sq in ray:
+                # Ray is ordered nearest-to-farthest; squares strictly
+                # between the origin and `to_sq` are the prefix up to
+                # (but excluding) `to_sq`'s index.
+                idx = ray.index(to_sq)
+                for intermediate in ray[:idx]:
+                    if intermediate in self._squares:
+                        raise IllegalMoveError(
+                            f"Ray from {from_sq} to {to_sq} is blocked at {intermediate}."
+                        )
+                return
+        raise IllegalMoveError(  # pragma: no cover — defensive, unreachable in practice
+            f"No ray from {from_sq} contains {to_sq} (internal geometry error)."
+        )
 
     # --- equality ------------------------------------------------------------
 
