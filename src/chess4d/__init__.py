@@ -31,6 +31,7 @@ from chess4d.pieces import (
     queen_moves,
     rook_moves,
 )
+from chess4d.startpos import initial_position
 from chess4d.state import GameState
 from chess4d.types import (
     BOARD_SIZE,
@@ -56,6 +57,7 @@ __all__ = [
     "any_king_attacked",
     "bishop_moves",
     "in_check",
+    "initial_position",
     "is_attacked",
     "king_moves",
     "kings_of",
