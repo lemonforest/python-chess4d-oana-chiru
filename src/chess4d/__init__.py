@@ -16,6 +16,8 @@ docstrings for readability; conversion happens only at the UI boundary.
 """
 
 from chess4d.board import Board4D
+from chess4d.errors import IllegalMoveError
+from chess4d.pieces import rook_moves
 from chess4d.types import (
     BOARD_SIZE,
     Color,
@@ -30,9 +32,11 @@ __all__ = [
     "BOARD_SIZE",
     "Board4D",
     "Color",
+    "IllegalMoveError",
     "Move4D",
     "PawnAxis",
     "Piece",
     "PieceType",
     "Square4D",
+    "rook_moves",
 ]

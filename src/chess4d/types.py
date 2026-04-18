@@ -86,7 +86,12 @@ class Square4D(NamedTuple):
 
         Corresponds to membership in the board ``B`` (paper §3.1).
         """
-        raise NotImplementedError("Square4D.in_bounds will be implemented in Deliverable 2 (TDD).")
+        return (
+            0 <= self.x < BOARD_SIZE
+            and 0 <= self.y < BOARD_SIZE
+            and 0 <= self.z < BOARD_SIZE
+            and 0 <= self.w < BOARD_SIZE
+        )
 
     def parity(self) -> int:
         """Return ``π(x, y, z, w) = (x + y + z + w) mod 2`` (paper §3.7, Lemma 2).
@@ -97,7 +102,7 @@ class Square4D(NamedTuple):
         Proposition 2(i)); knight moves always flip parity (Proposition
         2(iii)).
         """
-        raise NotImplementedError("Square4D.parity will be implemented in Deliverable 2 (TDD).")
+        return (self.x + self.y + self.z + self.w) % 2
 
     def chebyshev_distance(self, other: "Square4D") -> int:
         """Return ``d∞(self, other) = max{|Δx|, |Δy|, |Δz|, |Δw|}``.
@@ -106,8 +111,11 @@ class Square4D(NamedTuple):
         squares are adjacent iff this distance equals 1; any interior
         square therefore has exactly ``3^4 − 1 = 80`` neighbors (Lemma 1).
         """
-        raise NotImplementedError(
-            "Square4D.chebyshev_distance will be implemented in Deliverable 2 (TDD)."
+        return max(
+            abs(self.x - other.x),
+            abs(self.y - other.y),
+            abs(self.z - other.z),
+            abs(self.w - other.w),
         )
 
 
