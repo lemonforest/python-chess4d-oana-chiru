@@ -243,6 +243,24 @@ def test_manifest_has_required_top_level_keys(tmp_path: Path) -> None:
     assert manifest["tool_versions"]["python"].count(".") == 2
 
 
+def test_manifest_tool_versions_includes_chess4d(tmp_path: Path) -> None:
+    """``tool_versions.chess4d`` is populated from the installed wheel.
+
+    Regression guard: the dist name is ``python-chess4d-oana-chiru``,
+    not ``chess4d``, so a naive ``version("chess4d")`` call raises
+    ``PackageNotFoundError`` and silently drops the field. The manifest
+    must look up the correct dist but keep the short key stable for
+    downstream consumers.
+    """
+    result = generate_corpus(
+        n_games=1, max_plies=4, seed=0, output_dir=tmp_path, encode=False
+    )
+    manifest = _read_manifest(result.run_dir)
+    assert "chess4d" in manifest["tool_versions"]
+    # Looks like a dotted semver (e.g. "0.2.0" or "0.2.0.dev3").
+    assert manifest["tool_versions"]["chess4d"].count(".") >= 2
+
+
 def test_manifest_games_block_matches_summaries_no_encode(tmp_path: Path) -> None:
     result = generate_corpus(
         n_games=2, max_plies=6, seed=0, output_dir=tmp_path, encode=False

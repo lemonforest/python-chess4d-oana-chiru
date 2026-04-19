@@ -336,10 +336,14 @@ def _tool_versions() -> dict[str, str]:
     """Best-effort ``tool_versions`` block for the manifest.
 
     Always reports ``python``. Tries :mod:`importlib.metadata` for
-    ``chess4d`` and ``chess_spectral``; missing packages (e.g. source
-    checkout without an installed wheel, or ``chess_spectral`` absent
-    because the extra wasn't installed) are silently skipped rather
-    than failing the run.
+    ``chess4d`` (dist name ``python-chess4d-oana-chiru``) and
+    ``chess_spectral``; missing packages (e.g. source checkout without
+    an installed wheel, or ``chess_spectral`` absent because the extra
+    wasn't installed) are silently skipped rather than failing the run.
+
+    The manifest keys stay short (``chess4d``, ``chess_spectral``)
+    regardless of upstream dist-name renames, so downstream consumers
+    have a stable surface.
     """
     from importlib.metadata import PackageNotFoundError, version
 
@@ -347,9 +351,14 @@ def _tool_versions() -> dict[str, str]:
         "python": f"{sys.version_info.major}.{sys.version_info.minor}."
         f"{sys.version_info.micro}",
     }
-    for pkg in ("chess4d", "chess_spectral"):
+    # (manifest_key, distribution_name)
+    probes = (
+        ("chess4d", "python-chess4d-oana-chiru"),
+        ("chess_spectral", "chess_spectral"),
+    )
+    for key, dist in probes:
         try:
-            versions[pkg] = version(pkg)
+            versions[key] = version(dist)
         except PackageNotFoundError:
             continue
     return versions
