@@ -17,9 +17,19 @@ also 0-based; the central mixed-color slice block is at theoretical
 
 ## Status
 
-Pre-alpha. Currently implemented: core types (`Square4D`, `Move4D`,
-`Piece`, `Color`, `PieceType`, `PawnAxis`). Rook move generation and
-invariant tests are next. Other pieces and the legality pipeline are stubs.
+0.2.0 — core engine, legality, and corpus tooling are in. Implemented:
+all six piece types with paper-faithful move generation (rook / bishop /
+knight / queen / king / pawn), multi-king legality per §3.4 Def 3
+(a move is legal iff *no* king of the mover is attacked afterwards),
+X-axis castling with global attack safety, Y- and W-axis en passant,
+pawn promotion on the terminal rank of each forward axis, draw detection
+(50-move rule + threefold repetition via 4D state hash), `.c4d` move
+notation with round-trip I/O, chess-spectral integration (optional),
+and a random-playout corpus generator writing the
+`chess-maths-the-movie` nested layout.
+
+Not yet implemented: search / evaluation, a UI, Oana-Chiru 4D-aware
+opening books. See `CLAUDE.md` for architectural invariants.
 
 ## Spectral encoding (optional)
 
@@ -52,16 +62,69 @@ from chess4d.spectral import write_spectralz
 write_spectralz("game.spectralz", start_state, move_list)
 ```
 
-Generate a reproducible random-playout corpus:
-
-```bash
-chess4d-corpus-gen --n-games 10 --seed 42 --output ./corpus
-```
-
 The 11 channels cover the six piece types (with pawns split by forward
 axis per Oana & Chiru Def. 11) plus board-parity and side-to-move
 signals. See the `chess-spectral` notebooks in the mlehaptics repo for
 channel semantics and reconstruction examples.
+
+## Corpus generation
+
+`chess4d-corpus-gen` writes a reproducible random-playout corpus in the
+`chess-maths-the-movie` nested layout:
+
+```
+./corpus/<run_id>/
+  manifest.json                    # run metadata + per-game rows
+  c4d/game_NNN.c4d                 # compact 4D move notation
+  ndjson/game_NNN.ndjson           # per-ply pos4 snapshots + moves
+  spectralz/game_NNN.spectralz     # 45 056-dim per-ply encoding (optional)
+```
+
+`<run_id>` is auto-minted as `corpus_YYYYMMDD_HHMMSS_seedN` (or
+`..._unseeded`) and can be overridden with `--run-id`. Generation is
+two-pass: the playout pass writes c4d + NDJSON unconditionally, then an
+optional encoding pass reads the NDJSON and produces spectralz frames
+with absolute ply numbers.
+
+```bash
+# default: full-game spectralz for every ply
+chess4d-corpus-gen --n-games 10 --seed 42 --output ./corpus
+
+# only encode the final 30 plies per game (c4d + NDJSON still full)
+chess4d-corpus-gen --n-games 1 --max-plies 500 --encode-last 30
+
+# playout only — c4d + NDJSON, no spectralz, no [spectral] extra needed
+chess4d-corpus-gen --n-games 10 --seed 42 --no-encode
+
+# reproducible named run
+chess4d-corpus-gen --n-games 10 --seed 42 --run-id fixed-corpus-v1
+```
+
+### Retro-encoding an existing corpus
+
+Because encoding reads from the NDJSON sidecar, you can turn a
+`--no-encode` corpus into a spectralz corpus at any point without
+replaying the games:
+
+```bash
+# encode every ply of every game in an existing run
+chess4d-corpus-encode ./corpus/corpus_20260419_180342_seed42
+
+# tail-only: encode just the final 30 plies of each game
+chess4d-corpus-encode ./corpus/corpus_20260419_180342_seed42 --last-n 30
+```
+
+The standalone CLI is driven entirely by NDJSON and updates
+`manifest.json` in place. For a given `(seed, last_n)`, the
+retro-encoded spectralz bytes are identical to those produced by
+`chess4d-corpus-gen --encode-last N` on the same inputs.
+
+The NDJSON schema is `chess4d-ndjson-v1`: line 1 is the format header,
+line 2 is a `game_header` record with termination / ply count / seed,
+and subsequent lines carry per-ply records with the applied move,
+`side_to_move`, and a full `pos4` dict (2-char pawn values
+`Pw`/`Py`/`pw`/`py`, 1-char non-pawns, keyed by linear square index
+`(x<<9) | (y<<6) | (z<<3) | w`).
 
 ## Development
 

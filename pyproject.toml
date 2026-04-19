@@ -1,6 +1,6 @@
 [project]
 name = "python-chess4d-oana-chiru"
-version = "0.2.0"
+version = "0.3.0"
 description = "Python reference implementation of Oana & Chiru (2026) — A Mathematical Framework for Four-Dimensional Chess (DOI 10.3390/appliedmath6030048)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -24,6 +24,7 @@ spectral = [
 
 [project.scripts]
 chess4d-corpus-gen = "chess4d.corpus:main"
+chess4d-corpus-encode = "chess4d.corpus:encode_main"
 
 [build-system]
 requires = ["hatchling"]

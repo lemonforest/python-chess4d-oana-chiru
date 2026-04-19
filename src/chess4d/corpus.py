@@ -14,9 +14,32 @@ The ``spectralz/`` directory is absent with ``--no-encode`` and holds
 tail-only frames under ``--encode-last N`` (frames carry absolute ply
 numbers so they line up with the NDJSON and sidecar c4d).
 
+Two-pass generation
+-------------------
+Corpus generation is a two-pass operation, with NDJSON as the bridge:
+
+1. **Playout pass** — always: :func:`generate_corpus` plays each game
+   to completion, writes ``c4d/game_NNN.c4d`` and
+   ``ndjson/game_NNN.ndjson``. Early terminations (checkmate /
+   stalemate) are captured in the NDJSON ``game_header.termination``
+   field before the final ply count is known.
+2. **Encoding pass** — optional: :func:`encode_ndjson_to_spectralz`
+   reads the NDJSON back, slices the final ``--encode-last N`` plies
+   if requested, and writes a spectralz v4 file with absolute ply
+   numbers. ``--encode-last`` is therefore an encoder-time decision,
+   not a playout-time one — the full move list is already on disk.
+
+Because the encoding pass runs off the NDJSON and nothing else, you
+can retro-encode an existing ``--no-encode`` corpus via
+:func:`encode_existing_run` or the ``chess4d-corpus-encode`` CLI
+without replaying the games.
+
 Entry points::
 
     chess4d.corpus.generate_corpus(n_games=N, seed=S, ...) -> CorpusResult
+    chess4d.corpus.encode_existing_run(run_dir, *, last_n=...) -> CorpusResult
+    chess4d.corpus.encode_ndjson_to_spectralz(ndjson, sz, *, last_n=...)
+    chess4d.corpus.read_ndjson_game(path) -> (GameState, list[Move4D], dict)
 
 and, via ``[project.scripts]``::
 
@@ -24,8 +47,10 @@ and, via ``[project.scripts]``::
     chess4d-corpus-gen --n-games 1 --max-plies 500 --encode-last 30
     chess4d-corpus-gen --n-games 1 --max-plies 500 --no-encode
     chess4d-corpus-gen --n-games 1 --run-id fixed-corpus-v1
+    chess4d-corpus-encode ./corpus/<run_id>
+    chess4d-corpus-encode ./corpus/<run_id> --last-n 30
 
-The CLI also runs via ``python -m chess4d.corpus``. Termination
+The CLIs also run via ``python -m chess4d.corpus``. Termination
 reasons ("checkmate" / "stalemate" / "max_plies") are logged to stderr
 and carried on each :class:`GameSummary` so the caller can tally them.
 
@@ -38,8 +63,9 @@ Schema docs
   values (``Pw``/``Py``/``pw``/``py``) and 1-char non-pawns.
 
 The ``[spectral]`` extra is only required when encoding is enabled;
-``chess_spectral`` is imported lazily inside ``_encode_one_game`` so
-``--no-encode`` runs on a bare install.
+``chess_spectral`` is imported lazily inside
+:func:`encode_ndjson_to_spectralz` so the playout pass (and any
+NDJSON-only tooling) runs on a bare install.
 """
 
 from __future__ import annotations
@@ -64,9 +90,13 @@ from chess4d.types import Color, Move4D, PawnAxis, PieceType, Square4D
 __all__ = [
     "CorpusResult",
     "GameSummary",
+    "encode_existing_run",
+    "encode_ndjson_to_spectralz",
+    "encode_main",
     "generate_corpus",
     "main",
     "play_random_game",
+    "read_ndjson_game",
     "write_ndjson_game",
 ]
 
@@ -150,18 +180,6 @@ def play_random_game(
         gs.push(move)
         moves.append(move)
     return moves, "max_plies"
-
-
-def _state_after(moves: list[Move4D]) -> GameState:
-    """Replay ``moves`` from the starting position and return the final state.
-
-    Used to obtain a mid-game snapshot for tail-encoded spectralz
-    output without invoking the encoder on the prefix plies.
-    """
-    gs = initial_position()
-    for m in moves:
-        gs.push(m)
-    return gs
 
 
 # --- pos4 / NDJSON ----------------------------------------------------------
@@ -317,6 +335,100 @@ def write_ndjson_game(
     return path.stat().st_size
 
 
+def read_ndjson_game(
+    path: str | Path,
+) -> tuple[GameState, list[Move4D], dict[str, Any]]:
+    """Parse a ``chess4d-ndjson-v1`` file; return ``(start, moves, headers)``.
+
+    The inverse of :func:`write_ndjson_game`. Assumes the file was
+    written from the standard Oana-Chiru :func:`initial_position` — the
+    ply-0 ``pos4`` snapshot is validated against that starting
+    configuration, and a ``ValueError`` is raised if it doesn't match
+    (so a file written from a mid-game snapshot by some future producer
+    won't silently produce a wrong encoding).
+
+    This is the adapter the :func:`encode_ndjson_to_spectralz`
+    retro-encoder drives off of: NDJSON is the shared bridge between
+    the playout pass (c4d + NDJSON + manifest) and the optional
+    encoding pass (spectralz). It is *not* required for the encoder
+    to run — the in-memory ``(GameState, moves)`` form still works
+    directly via :func:`chess4d.spectral.write_spectralz`.
+
+    Returns
+    -------
+    start
+        The canonical :func:`initial_position` (a fresh deep copy, so
+        the caller can mutate it freely).
+    moves
+        The ``len(moves) == n_plies`` move list reconstructed from the
+        per-ply records, in play order. ``is_castling`` and
+        ``is_en_passant`` flags are preserved.
+    headers
+        The ``game_header.headers`` block — typically
+        ``{"termination", "n_plies"}`` plus ``"seed"`` when the writer
+        knew one.
+    """
+    p = Path(path)
+    records = [
+        json.loads(line) for line in p.read_text(encoding="utf-8").splitlines()
+    ]
+    if not records:
+        raise ValueError(f"{p} is empty — not a chess4d-ndjson-v1 file")
+    fmt = records[0]
+    if fmt.get("format") != NDJSON_FORMAT_ID:
+        raise ValueError(
+            f"{p} line 1 format={fmt.get('format')!r}, expected "
+            f"{NDJSON_FORMAT_ID!r}"
+        )
+    if len(records) < 2 or records[1].get("type") != "game_header":
+        raise ValueError(f"{p} line 2 is not a game_header record")
+    headers: dict[str, Any] = dict(records[1].get("headers") or {})
+    n_plies = int(headers.get("n_plies", len(records) - 3))
+    if len(records) != n_plies + 3:
+        raise ValueError(
+            f"{p}: expected {n_plies + 3} lines "
+            f"(format + game_header + {n_plies + 1} ply records), "
+            f"got {len(records)}"
+        )
+    # Ply 0 sanity: pos4 must match the canonical starting position so
+    # we're not silently encoding from the wrong root.
+    ply0 = records[2]
+    if ply0.get("ply") != 0:
+        raise ValueError(f"{p}: line 3 ply={ply0.get('ply')!r}, expected 0")
+    expected_pos4 = _pos4_compact(initial_position())
+    if ply0.get("pos4") != expected_pos4:
+        raise ValueError(
+            f"{p}: ply-0 pos4 does not match initial_position(); "
+            "mid-game-start NDJSON files are not supported by this "
+            "version of the reader"
+        )
+    moves: list[Move4D] = []
+    for i, rec in enumerate(records[3:], start=1):
+        if rec.get("ply") != i:
+            raise ValueError(
+                f"{p}: record {i + 2} has ply={rec.get('ply')!r}, expected {i}"
+            )
+        from_list = rec.get("move_from")
+        to_list = rec.get("move_to")
+        if from_list is None or to_list is None:
+            raise ValueError(
+                f"{p}: ply {i} has null move_from/move_to — only ply 0 "
+                "is allowed to omit the move"
+            )
+        promo_name = rec.get("move_promo")
+        promotion = PieceType[promo_name] if promo_name is not None else None
+        moves.append(
+            Move4D(
+                from_sq=Square4D(*from_list),
+                to_sq=Square4D(*to_list),
+                promotion=promotion,
+                is_castling=bool(rec.get("is_castling", False)),
+                is_en_passant=bool(rec.get("is_en_passant", False)),
+            )
+        )
+    return initial_position(), moves, headers
+
+
 # --- run id / manifest ------------------------------------------------------
 
 
@@ -421,29 +533,62 @@ def _write_manifest(
 # --- encoding dispatch ------------------------------------------------------
 
 
-def _encode_one_game(
-    moves: list[Move4D],
-    path: Path,
+def encode_ndjson_to_spectralz(
+    ndjson_path: str | Path,
+    spectralz_path: str | Path,
     *,
-    encode_last: Optional[int],
+    last_n: Optional[int] = None,
 ) -> tuple[int, int, int]:
-    """Write the spectralz file for one game. Returns ``(pivot, encoded_plies, nbytes)``.
+    """NDJSON → spectralz adapter. Returns ``(pivot, encoded_plies, nbytes)``.
 
-    ``pivot`` is the absolute ply index of the first encoded frame
-    (``0`` when encoding the whole game). ``encoded_plies`` counts the
-    moves carried in the file (``len(moves) - pivot``); the frame
-    count on disk is one greater because of the leading
-    initial-state sentinel. Lazily imports :mod:`chess4d.spectral` so
-    callers on the ``--no-encode`` path never touch ``chess_spectral``.
+    Reads the chess4d-ndjson-v1 file at ``ndjson_path`` to recover the
+    full ``(start_state, moves)`` pair, then writes the corresponding
+    spectralz v4 file at ``spectralz_path``.
+
+    ``last_n`` truncates the encoded range to the final ``last_n``
+    plies (matching the ``--encode-last`` corpus CLI flag); frames
+    carry absolute ply numbers via ``write_spectralz(..., base_ply=...)``
+    so they line up with the NDJSON and c4d sidecars. ``last_n=None``
+    encodes the entire game.
+
+    Because the NDJSON carries all the information the encoder needs —
+    the full move list plus ``is_castling`` / ``is_en_passant`` flags —
+    this function is the canonical path for *retro-encoding* an
+    existing ``--no-encode`` corpus (see :func:`encode_existing_run`).
+    Lazily imports :mod:`chess4d.spectral` so the NDJSON writer itself
+    remains usable on a bare install without the ``[spectral]`` extra.
     """
     from chess4d.spectral import write_spectralz  # lazy import
 
+    start, moves, _ = read_ndjson_game(ndjson_path)
     total = len(moves)
-    pivot = max(0, total - encode_last) if encode_last is not None else 0
-    start = _state_after(moves[:pivot])
+    pivot = max(0, total - last_n) if last_n is not None else 0
+    tail_start = copy.deepcopy(start)
+    for m in moves[:pivot]:
+        tail_start.push(m)
     tail_moves = moves[pivot:]
-    nbytes = write_spectralz(path, start, tail_moves, base_ply=pivot)
+    nbytes = write_spectralz(
+        spectralz_path, tail_start, tail_moves, base_ply=pivot
+    )
     return pivot, len(tail_moves), nbytes
+
+
+def _encode_one_game(
+    ndjson_path: Path,
+    spectralz_path: Path,
+    *,
+    encode_last: Optional[int],
+) -> tuple[int, int, int]:
+    """Thin ``generate_corpus``-internal wrapper over the NDJSON path.
+
+    Kept as a private dispatch seam so the two-pass flow inside
+    ``generate_corpus`` has a single place to add cross-cutting
+    concerns (progress bars, error capture, …) without growing the
+    public :func:`encode_ndjson_to_spectralz` signature.
+    """
+    return encode_ndjson_to_spectralz(
+        ndjson_path, spectralz_path, last_n=encode_last
+    )
 
 
 # --- corpus entry point -----------------------------------------------------
@@ -521,8 +666,14 @@ def generate_corpus(
         if encode:
             assert spectralz_dir is not None  # mkdir above
             encoding_path = spectralz_dir / f"{stem}.spectralz"
+            # Two-pass: we already wrote the NDJSON above; drive the
+            # spectralz encoder off that sidecar rather than the
+            # in-memory move list. The NDJSON is the bridge between
+            # generation and encoding, so adding a standalone
+            # retro-encode command (see encode_existing_run) becomes
+            # a pure second-pass over the same bytes.
             pivot, encoded_plies, encoding_bytes = _encode_one_game(
-                moves, encoding_path, encode_last=encode_last
+                ndjson_path, encoding_path, encode_last=encode_last
             )
         summaries.append(
             GameSummary(
@@ -577,6 +728,109 @@ def generate_corpus(
         run_dir=run_dir,
         run_id=resolved_run_id,
         manifest_path=manifest_path,
+        games=summaries,
+    )
+
+
+# --- retro-encode pass ------------------------------------------------------
+
+
+def encode_existing_run(
+    run_dir: str | Path,
+    *,
+    last_n: Optional[int] = None,
+) -> CorpusResult:
+    """Retro-encode an existing ``--no-encode`` corpus; return fresh :class:`CorpusResult`.
+
+    The run directory must contain a ``manifest.json`` (written by a
+    prior :func:`generate_corpus` call) and one ``ndjson/*.ndjson`` per
+    game row. This function:
+
+    1. creates ``run_dir/spectralz/`` if missing,
+    2. feeds each NDJSON through :func:`encode_ndjson_to_spectralz`,
+       writing ``spectralz/game_NNN.spectralz`` with absolute ply
+       numbers (``last_n`` honored per-game),
+    3. rewrites ``manifest.json`` in place so ``fetch_params.encode``,
+       ``fetch_params.encode_last``, ``aggregates.n_encoded_games``,
+       ``aggregates.total_encoded_plies``, and each ``games[i]``
+       ``spectralz`` / ``spectralz_bytes`` / ``encoded_plies`` /
+       ``pivot_ply`` row reflects the new encoding,
+    4. returns a :class:`CorpusResult` for the updated run.
+
+    Byte-identical equivalence: for a given (seed, last_n), a corpus
+    generated via ``generate_corpus(..., encode_last=N)`` and a corpus
+    generated via ``generate_corpus(..., encode=False)`` followed by
+    ``encode_existing_run(run_dir, last_n=N)`` produce the same
+    spectralz bytes — both paths ultimately call
+    :func:`chess4d.spectral.write_spectralz` with the same
+    ``(tail_start, tail_moves, base_ply)``.
+    """
+    run_path = Path(run_dir)
+    manifest_path = run_path / "manifest.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"no manifest.json under {run_path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    spectralz_dir = run_path / "spectralz"
+    spectralz_dir.mkdir(parents=True, exist_ok=True)
+
+    # Reload per-game fields from the existing manifest, then fill in
+    # the fresh encoding output. The c4d / NDJSON rows are untouched.
+    summaries: list[GameSummary] = []
+    for row in manifest["games"]:
+        stem = row["stem"]
+        c4d_path = run_path / row["c4d"]
+        ndjson_path = run_path / row["ndjson"]
+        spectralz_path = spectralz_dir / f"{stem}.spectralz"
+        pivot, encoded_plies, encoding_bytes = encode_ndjson_to_spectralz(
+            ndjson_path, spectralz_path, last_n=last_n
+        )
+        summaries.append(
+            GameSummary(
+                stem=stem,
+                c4d_path=c4d_path,
+                ndjson_path=ndjson_path,
+                encoding_path=spectralz_path,
+                plies=int(row["plies"]),
+                encoded_plies=encoded_plies,
+                pivot_ply=pivot,
+                termination=row["termination"],
+                c4d_bytes=int(row["c4d_bytes"]),
+                ndjson_bytes=int(row["ndjson_bytes"]),
+                encoding_bytes=encoding_bytes,
+            )
+        )
+        print(
+            f"{stem}: plies={int(row['plies']):4d} "
+            f"term={row['termination']:10s} "
+            f"encoded_plies={encoded_plies:4d} pivot={pivot:4d} "
+            f"bytes={encoding_bytes}",
+            file=sys.stderr,
+        )
+
+    # Fresh fetch_params / aggregates reflecting the new encoding pass.
+    prior = manifest.get("fetch_params", {})
+    fetch_params: dict[str, Any] = dict(prior)
+    fetch_params["encode"] = True
+    fetch_params["encode_last"] = last_n
+    aggregates: dict[str, Any] = {
+        "n_games": len(summaries),
+        "n_encoded_games": len(summaries),
+        "total_plies": sum(s.plies for s in summaries),
+        "total_encoded_plies": sum(s.encoded_plies for s in summaries),
+        "n_errors": 0,
+        "wall_time_s": float(manifest.get("aggregates", {}).get("wall_time_s", 0.0)),
+    }
+    new_manifest_path = _write_manifest(
+        run_path,
+        run_id=manifest["run_id"],
+        fetch_params=fetch_params,
+        aggregates=aggregates,
+        games=summaries,
+    )
+    return CorpusResult(
+        run_dir=run_path,
+        run_id=manifest["run_id"],
+        manifest_path=new_manifest_path,
         games=summaries,
     )
 
@@ -658,6 +912,47 @@ def main(argv: Optional[list[str]] = None) -> int:
         f"wrote {len(result.games)} games, {total_plies} plies "
         f"(encoded {total_encoded_plies}), "
         f"{total_encoded_bytes} spectralz bytes to {result.run_dir}",
+        file=sys.stderr,
+    )
+    return 0
+
+
+def _build_encode_parser() -> argparse.ArgumentParser:
+    """Argument parser for the retro-encode CLI (``chess4d-corpus-encode``)."""
+    parser = argparse.ArgumentParser(
+        prog="chess4d-corpus-encode",
+        description="Encode spectralz files for an existing chess4d "
+        "corpus run directory. Reads each ndjson/*.ndjson, writes "
+        "spectralz/*.spectralz with absolute ply numbers, and updates "
+        "manifest.json in place. Requires the [spectral] extra.",
+    )
+    parser.add_argument(
+        "run_dir",
+        type=Path,
+        help="Corpus run directory (must contain manifest.json and ndjson/).",
+    )
+    parser.add_argument(
+        "--last-n",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Encode only the final N plies per game; frames carry "
+        "absolute ply numbers. Omit to encode the entire game.",
+    )
+    return parser
+
+
+def encode_main(argv: Optional[list[str]] = None) -> int:
+    """CLI entry point for ``chess4d-corpus-encode``. Returns exit code."""
+    parser = _build_encode_parser()
+    args = parser.parse_args(argv)
+    result = encode_existing_run(args.run_dir, last_n=args.last_n)
+    total_encoded_bytes = sum(s.encoding_bytes for s in result.games)
+    total_encoded_plies = sum(s.encoded_plies for s in result.games)
+    print(
+        f"encoded {len(result.games)} games, "
+        f"{total_encoded_plies} plies, "
+        f"{total_encoded_bytes} spectralz bytes in {result.run_dir}",
         file=sys.stderr,
     )
     return 0

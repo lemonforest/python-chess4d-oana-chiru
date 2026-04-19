@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-04-19
+
+Two-pass corpus flow with NDJSON as the bridge between the playout
+and encoding passes, plus a standalone `chess4d-corpus-encode` CLI
+for retro-encoding any existing corpus. No breaking API changes;
+byte-identical spectralz output is preserved across both the inline
+and retro-encoded paths.
+
+### Added
+
+- `chess4d.corpus.read_ndjson_game(path) -> (GameState, list[Move4D], dict)` —
+  parses chess4d-ndjson-v1 files back into the `(start, moves)` pair the
+  encoder needs. Validates the format header, ply numbering, and that
+  ply-0 `pos4` matches `initial_position()`.
+- `chess4d.corpus.encode_ndjson_to_spectralz(ndjson, sz, *, last_n=None)` —
+  NDJSON → spectralz adapter. `last_n` honors the same
+  absolute-ply semantics as `--encode-last`.
+- `chess4d.corpus.encode_existing_run(run_dir, *, last_n=None)` —
+  retro-encodes a `--no-encode` corpus: iterates the NDJSON sidecars,
+  writes `spectralz/` files, and rewrites `manifest.json` in place.
+- `chess4d-corpus-encode <run_dir> [--last-n N]` — standalone CLI entry
+  point for the retro-encode flow; registered under `[project.scripts]`.
+
+### Changed
+
+- `generate_corpus()` internals are now two-pass: the playout pass
+  writes `c4d/` and `ndjson/` unconditionally, then (if encoding is
+  requested) a second pass drives the spectralz writer off the NDJSON
+  sidecar rather than the in-memory move list. Public API, CLI
+  flags, output layout, and spectralz byte-exactness are unchanged —
+  `test_two_pass_equivalence_byte_identical` anchors this.
+- README status section: the stale "Pre-alpha… rook moves are next"
+  paragraph now reflects the shipped engine (all pieces, legality,
+  notation round-trip, corpus generator). Added a "Corpus generation"
+  section documenting the nested layout, the four CLI modes, the
+  retro-encode flow, and the `chess4d-ndjson-v1` schema.
+
+### Removed
+
+- Dead `_state_after` helper in `chess4d.corpus` — superseded by the
+  replay loop inside `encode_ndjson_to_spectralz`.
+
 ## [0.2.0] — 2026-04-19
 
 Corpus restructure: nested `<run_id>/` layout, NDJSON per-ply snapshots,
