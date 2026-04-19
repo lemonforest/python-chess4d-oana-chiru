@@ -17,7 +17,7 @@ also 0-based; the central mixed-color slice block is at theoretical
 
 ## Status
 
-0.2.0 — core engine, legality, and corpus tooling are in. Implemented:
+0.3.0 — core engine, legality, and corpus tooling are in. Implemented:
 all six piece types with paper-faithful move generation (rook / bishop /
 knight / queen / king / pawn), multi-king legality per §3.4 Def 3
 (a move is legal iff *no* king of the mover is attacked afterwards),
