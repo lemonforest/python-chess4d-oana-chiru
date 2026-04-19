@@ -28,8 +28,12 @@ from chess4d.corpus import (
     CorpusResult,
     GameSummary,
     _auto_run_id,
+    encode_existing_run,
+    encode_main,
+    encode_ndjson_to_spectralz,
     generate_corpus,
     main,
+    read_ndjson_game,
 )
 from chess4d.notation import read_game_file
 
@@ -259,6 +263,57 @@ def test_manifest_tool_versions_includes_chess4d(tmp_path: Path) -> None:
     assert "chess4d" in manifest["tool_versions"]
     # Looks like a dotted semver (e.g. "0.2.0" or "0.2.0.dev3").
     assert manifest["tool_versions"]["chess4d"].count(".") >= 2
+
+
+def test_read_ndjson_game_round_trips_moves(tmp_path: Path) -> None:
+    """write_ndjson_game → read_ndjson_game recovers the exact move list.
+
+    NDJSON is the bridge the encoder pass runs off of, so moves must
+    round-trip byte-for-field: all five :class:`Move4D` fields (from,
+    to, promotion, is_castling, is_en_passant) survive serialization.
+    """
+    result = generate_corpus(
+        n_games=1, max_plies=12, seed=5, output_dir=tmp_path, encode=False
+    )
+    (s,) = result.games
+    # c4d is the authoritative move list from the playout.
+    _, original_moves = read_game_file(s.c4d_path)
+    # Now read back via the NDJSON reader.
+    start, moves, headers = read_ndjson_game(s.ndjson_path)
+    assert moves == original_moves
+    assert headers["n_plies"] == len(original_moves)
+    assert headers["termination"] == s.termination
+    assert headers["seed"] == 5
+    # Start is the canonical initial position (the reader enforces this).
+    from chess4d import initial_position
+    assert start.side_to_move == initial_position().side_to_move
+
+
+def test_read_ndjson_game_rejects_wrong_format(tmp_path: Path) -> None:
+    """The reader refuses non-chess4d-ndjson-v1 files."""
+    bad = tmp_path / "bad.ndjson"
+    bad.write_text(
+        json.dumps({"format": "some-other-format-v3"}) + "\n"
+        + json.dumps({"type": "game_header", "game": 0, "headers": {}}) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="chess4d-ndjson-v1"):
+        read_ndjson_game(bad)
+
+
+def test_read_ndjson_game_rejects_truncated_file(tmp_path: Path) -> None:
+    """n_plies in the game header must match the record count."""
+    result = generate_corpus(
+        n_games=1, max_plies=6, seed=0, output_dir=tmp_path, encode=False
+    )
+    (s,) = result.games
+    # Drop the last record — ``n_plies`` in the header still claims the
+    # old count, so the reader should catch the mismatch.
+    lines = s.ndjson_path.read_text(encoding="utf-8").splitlines()
+    truncated = tmp_path / "short.ndjson"
+    truncated.write_text("\n".join(lines[:-1]) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="expected"):
+        read_ndjson_game(truncated)
 
 
 def test_manifest_games_block_matches_summaries_no_encode(tmp_path: Path) -> None:
@@ -497,3 +552,136 @@ def test_reproducible_under_fixed_seed(tmp_path: Path) -> None:
         assert sa.encoding_path is not None
         assert sb.encoding_path is not None
         assert sa.encoding_path.read_bytes() == sb.encoding_path.read_bytes()
+
+
+# --- Two-pass (NDJSON-bridged) encoding ------------------------------------
+
+
+def test_encode_ndjson_to_spectralz_full_game(tmp_path: Path) -> None:
+    """Direct NDJSON → spectralz adapter, no tail. N+1 frames out."""
+    gen = generate_corpus(
+        n_games=1, max_plies=10, seed=0, output_dir=tmp_path, encode=False
+    )
+    (s,) = gen.games
+    sz_path = tmp_path / "out.spectralz"
+    pivot, encoded_plies, nbytes = encode_ndjson_to_spectralz(
+        s.ndjson_path, sz_path
+    )
+    assert pivot == 0
+    assert encoded_plies == s.plies
+    assert nbytes > 0
+    _, frames = read_spectralz_v4(sz_path)
+    assert len(frames) == s.plies + 1
+    assert [f.ply for f in frames] == list(range(s.plies + 1))
+
+
+def test_encode_ndjson_to_spectralz_last_n(tmp_path: Path) -> None:
+    """``last_n`` tail slice: 6 frames with absolute plies."""
+    gen = generate_corpus(
+        n_games=1, max_plies=20, seed=0, output_dir=tmp_path, encode=False
+    )
+    (s,) = gen.games
+    sz_path = tmp_path / "tail.spectralz"
+    pivot, encoded_plies, nbytes = encode_ndjson_to_spectralz(
+        s.ndjson_path, sz_path, last_n=5
+    )
+    assert pivot == s.plies - 5
+    assert encoded_plies == 5
+    _, frames = read_spectralz_v4(sz_path)
+    assert len(frames) == 6
+    assert [f.ply for f in frames] == list(range(pivot, pivot + 6))
+
+
+def test_two_pass_equivalence_byte_identical(tmp_path: Path) -> None:
+    """Inline encoding == generate-then-retro-encode, byte-for-byte.
+
+    Anchors the two-pass refactor: driving the encoder off the NDJSON
+    produces the same spectralz bytes as driving it off the in-memory
+    move list, because both paths resolve to the same
+    ``write_spectralz(tail_start, tail_moves, base_ply=...)`` call.
+    """
+    # Path A — inline encode during playout.
+    inline = generate_corpus(
+        n_games=2,
+        max_plies=15,
+        seed=11,
+        output_dir=tmp_path / "inline",
+        encode_last=5,
+        run_id="fixed",
+    )
+    # Path B — playout first, encode afterwards.
+    bare = generate_corpus(
+        n_games=2,
+        max_plies=15,
+        seed=11,
+        output_dir=tmp_path / "bare",
+        encode=False,
+        run_id="fixed",
+    )
+    retro = encode_existing_run(bare.run_dir, last_n=5)
+    assert len(inline.games) == len(retro.games) == 2
+    for a, b in zip(inline.games, retro.games):
+        assert a.encoding_path is not None
+        assert b.encoding_path is not None
+        assert a.encoding_path.read_bytes() == b.encoding_path.read_bytes()
+        assert a.encoded_plies == b.encoded_plies
+        assert a.pivot_ply == b.pivot_ply
+
+
+def test_encode_existing_run_updates_manifest(tmp_path: Path) -> None:
+    """Retro-encoding rewrites manifest fields to reflect the new pass."""
+    bare = generate_corpus(
+        n_games=2,
+        max_plies=10,
+        seed=3,
+        output_dir=tmp_path,
+        encode=False,
+    )
+    manifest_before = _read_manifest(bare.run_dir)
+    assert manifest_before["fetch_params"]["encode"] is False
+    assert manifest_before["aggregates"]["n_encoded_games"] == 0
+    for row in manifest_before["games"]:
+        assert row["spectralz"] is None
+        assert row["spectralz_bytes"] is None
+
+    encode_existing_run(bare.run_dir, last_n=3)
+
+    manifest_after = _read_manifest(bare.run_dir)
+    assert manifest_after["fetch_params"]["encode"] is True
+    assert manifest_after["fetch_params"]["encode_last"] == 3
+    assert manifest_after["aggregates"]["n_encoded_games"] == 2
+    for row in manifest_after["games"]:
+        assert row["spectralz"] == f"spectralz/{row['stem']}.spectralz"
+        assert row["spectralz_bytes"] > 0
+        assert row["encoded_plies"] == 3
+        # Ply numbering stays absolute.
+        assert row["pivot_ply"] == row["plies"] - 3
+
+
+def test_encode_existing_run_missing_manifest(tmp_path: Path) -> None:
+    """Retro-encoding a directory without a manifest raises."""
+    empty = tmp_path / "empty_run"
+    empty.mkdir()
+    with pytest.raises(FileNotFoundError, match="manifest.json"):
+        encode_existing_run(empty, last_n=5)
+
+
+def test_encode_main_cli(tmp_path: Path) -> None:
+    """``chess4d-corpus-encode`` CLI runs over a prior --no-encode run."""
+    bare = generate_corpus(
+        n_games=1,
+        max_plies=10,
+        seed=0,
+        output_dir=tmp_path,
+        encode=False,
+    )
+    rc = encode_main([str(bare.run_dir), "--last-n", "4"])
+    assert rc == 0
+    sz = bare.run_dir / "spectralz" / "game_001.spectralz"
+    assert sz.exists()
+    _, frames = read_spectralz_v4(sz)
+    assert len(frames) == 5  # last-n=4 → 4 moves + 1 sentinel
+    # Manifest now reports the encoded pass.
+    manifest = _read_manifest(bare.run_dir)
+    assert manifest["fetch_params"]["encode"] is True
+    assert manifest["fetch_params"]["encode_last"] == 4
