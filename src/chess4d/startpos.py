@@ -15,8 +15,11 @@ Totals: ``4·32 + 24·16 + 24·16 + 12·0 = 896``; per color ``4·16 +
 Within a populated slice, the standard 2D layout is reproduced in the
 ``(x, y)`` plane: back rank ``R N B Q K B N R`` at ``y = 0`` (white) or
 ``y = 7`` (black), and pawns at ``y = 1`` (white) or ``y = 6`` (black).
-All pawns are Y-oriented in the initial position — they advance along
-the ``y`` axis within their slice.
+Pawn orientation alternates with ``x`` per §3.3 / Def 11: pawns on
+even ``x`` advance along the ``y`` axis (``PawnAxis.Y``); pawns on odd
+``x`` advance along the ``w`` axis (``PawnAxis.W``). This alternation
+is load-bearing — the Y↔W permutation is one of three generators of
+the ruleset-preserving subgroup ``G_rules`` (§3.11).
 
 Coordinate convention: the paper's §3.3 uses 1-based coordinates; the
 constants below are 0-based (the package-wide convention). The two
@@ -90,9 +93,10 @@ def _place_color_on_slice(board: Board4D, z: int, w: int, color: Color) -> None:
     """Place one color's 16 pieces on the ``(z, w)``-slice.
 
     White uses ``y = 0`` (back rank) and ``y = 1`` (pawns); black uses
-    ``y = BOARD_SIZE - 1`` and ``y = BOARD_SIZE - 2``. All pawns are
-    Y-oriented. The eight ``x`` columns follow :data:`_BACK_RANK` for
-    the back rank.
+    ``y = BOARD_SIZE - 1`` and ``y = BOARD_SIZE - 2``. Pawn
+    orientation alternates with ``x`` per §3.3 / Def 11: even ``x`` →
+    :attr:`PawnAxis.Y`, odd ``x`` → :attr:`PawnAxis.W`. The eight
+    ``x`` columns follow :data:`_BACK_RANK` for the back rank.
     """
     if color is Color.WHITE:
         back_y = 0
@@ -103,9 +107,10 @@ def _place_color_on_slice(board: Board4D, z: int, w: int, color: Color) -> None:
     for x, piece_type in enumerate(_BACK_RANK):
         board.place(Square4D(x, back_y, z, w), Piece(color=color, piece_type=piece_type))
     for x in range(BOARD_SIZE):
+        axis = PawnAxis.Y if x % 2 == 0 else PawnAxis.W
         board.place(
             Square4D(x, pawn_y, z, w),
-            Piece(color=color, piece_type=PieceType.PAWN, pawn_axis=PawnAxis.Y),
+            Piece(color=color, piece_type=PieceType.PAWN, pawn_axis=axis),
         )
 
 

@@ -92,14 +92,44 @@ def test_per_color_king_count_is_28() -> None:
     assert len(black_kings) == 28
 
 
-def test_every_pawn_is_y_oriented() -> None:
-    """Paper §3.3: the initial position places Y-oriented pawns only;
-    W-oriented pawns arise only via later placement/promotion rules."""
+def test_initial_position_matches_paper_section_3_3() -> None:
+    """Paper §3.3 / Def 11: pawn orientation alternates with ``x``.
+
+    Every pawn on an even-``x`` file is Y-oriented; every pawn on an
+    odd-``x`` file is W-oriented. This alternation is load-bearing —
+    the Y↔W permutation is one of three generators of the
+    ruleset-preserving subgroup ``G_rules`` (§3.11), so it must hold
+    for both colors in every populated slice.
+    """
     state = initial_position()
+    for color in (Color.WHITE, Color.BLACK):
+        for sq, piece in state.board.pieces_of(color):
+            if piece.piece_type is not PieceType.PAWN:
+                continue
+            expected = PawnAxis.Y if sq.x % 2 == 0 else PawnAxis.W
+            assert piece.pawn_axis is expected, (
+                f"pawn at {sq} has axis {piece.pawn_axis!r}, expected {expected!r}"
+            )
+
+
+def test_initial_position_has_both_pawn_axes() -> None:
+    """Sanity: the alternation produces non-empty counts on both axes.
+
+    Protects against a regression where the alternation logic silently
+    collapses to a single axis (all-Y or all-W).
+    """
+    state = initial_position()
+    axes: dict[PawnAxis, int] = {PawnAxis.Y: 0, PawnAxis.W: 0}
     for color in (Color.WHITE, Color.BLACK):
         for _sq, piece in state.board.pieces_of(color):
             if piece.piece_type is PieceType.PAWN:
-                assert piece.pawn_axis is PawnAxis.Y
+                assert piece.pawn_axis is not None
+                axes[piece.pawn_axis] += 1
+    assert axes[PawnAxis.Y] > 0
+    assert axes[PawnAxis.W] > 0
+    assert axes[PawnAxis.Y] == axes[PawnAxis.W], (
+        f"alternation should split pawns 50/50 across axes, got {axes}"
+    )
 
 
 # --- per-slice spot checks -------------------------------------------------
@@ -182,7 +212,9 @@ def test_white_pawn_row_in_a_populated_slice() -> None:
         assert piece is not None
         assert piece.color is Color.WHITE
         assert piece.piece_type is PieceType.PAWN
-        assert piece.pawn_axis is PawnAxis.Y
+        # Paper §3.3: even x → Y-oriented, odd x → W-oriented.
+        expected = PawnAxis.Y if x % 2 == 0 else PawnAxis.W
+        assert piece.pawn_axis is expected
 
 
 def test_black_back_rank_layout_in_a_populated_slice() -> None:
@@ -213,7 +245,9 @@ def test_black_pawn_row_in_a_populated_slice() -> None:
         assert piece is not None
         assert piece.color is Color.BLACK
         assert piece.piece_type is PieceType.PAWN
-        assert piece.pawn_axis is PawnAxis.Y
+        # Paper §3.3: even x → Y-oriented, odd x → W-oriented.
+        expected = PawnAxis.Y if x % 2 == 0 else PawnAxis.W
+        assert piece.pawn_axis is expected
 
 
 def test_central_slice_contains_both_back_ranks() -> None:

@@ -57,12 +57,18 @@ def _two_pawn_game() -> tuple[GameState, list[Move4D]]:
 
 
 def _longer_game() -> tuple[GameState, list[Move4D]]:
-    """A 10-ply alternating pawn-push game across slice (3, 3)."""
+    """An 8-ply alternating pawn-push game across slice (3, 3).
+
+    Only even-``x`` files are exercised because those pawns are
+    Y-oriented (paper §3.3); odd-``x`` pawns are W-oriented and
+    advance along a different axis. Restricting to Y-pawns keeps the
+    fixture purely about the notation layer, not pawn-axis mechanics.
+    """
     start = initial_position()
     moves: list[Move4D] = []
     # White pushes pawns from (x, 1, 3, 3) to (x, 2, 3, 3), alternating
     # with black pushes from (x, 6, 3, 3) to (x, 5, 3, 3).
-    for x in range(5):
+    for x in (0, 2, 4, 6):
         moves.append(_pawn_push(Square4D(x, 1, 3, 3), Square4D(x, 2, 3, 3)))
         moves.append(_pawn_push(Square4D(x, 6, 3, 3), Square4D(x, 5, 3, 3)))
     return start, moves
@@ -370,25 +376,27 @@ def test_file_custom_start_replays_identically(tmp_path: Path) -> None:
 
 
 def test_file_long_game_round_trip(tmp_path: Path) -> None:
-    """A 40-ply game's moves and end-state match across write/read.
+    """A 32-ply game's moves and end-state match across write/read.
 
     Moves are pawn double-pushes on the four central ``(z, w)``-slices —
     the only slices that carry both colors, so black has pieces to move
-    in response.
+    in response. Only even-``x`` files are pushed because those pawns
+    are Y-oriented (paper §3.3); the odd-``x`` pawns are W-oriented
+    and advance along a different axis.
     """
     start = initial_position()
     state = deepcopy(start)
     moves: list[Move4D] = []
     slices = [(3, 3), (3, 4), (4, 3), (4, 4)]
     for z, w in slices:
-        for x in range(5):
+        for x in (0, 2, 4, 6):
             white = Move4D(Square4D(x, 1, z, w), Square4D(x, 3, z, w))
             moves.append(white)
             state.push(white)
             black = Move4D(Square4D(x, 6, z, w), Square4D(x, 4, z, w))
             moves.append(black)
             state.push(black)
-    assert len(moves) == 40
+    assert len(moves) == 32
 
     for ext in (".c4d", ".json"):
         p = tmp_path / f"long{ext}"
