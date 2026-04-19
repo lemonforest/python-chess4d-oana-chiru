@@ -212,27 +212,54 @@ def test_write_spectralz_initial_frame_has_zero_move(tmp_path: Path) -> None:
     assert f0.promo == 0
 
 
+def test_write_spectralz_base_ply_offset(tmp_path: Path) -> None:
+    """``base_ply`` shifts every ``Frame4D.ply`` by a constant offset.
+
+    This is the mechanism corpus.py uses to write tail-encoded files
+    whose ``ply`` numbers match absolute positions in the full game.
+    """
+    start = initial_position()
+    moves = [
+        Move4D(Square4D(0, 1, 3, 3), Square4D(0, 3, 3, 3)),
+        Move4D(Square4D(0, 6, 3, 3), Square4D(0, 4, 3, 3)),
+    ]
+    path = tmp_path / "offset.spectralz"
+    write_spectralz(path, start, moves, base_ply=100)
+    _, frames = read_spectralz_v4(path)
+    assert [f.ply for f in frames] == [100, 101, 102]
+
+
 # 4e. Corpus smoke ----------------------------------------------------------
 
 
 def test_generate_corpus_produces_requested_files(tmp_path: Path) -> None:
-    summaries = generate_corpus(
+    result = generate_corpus(
         n_games=3, max_plies=10, seed=42, output_dir=tmp_path
     )
-    assert len(summaries) == 3
-    for s in summaries:
-        assert s.path.exists()
-        assert s.bytes_written > 0
-        header, _ = read_spectralz_v4(s.path)
+    assert len(result.games) == 3
+    assert (result.run_dir / "spectralz").is_dir()
+    for s in result.games:
+        assert s.c4d_path.exists()
+        assert s.ndjson_path.exists()
+        assert s.encoding_path is not None
+        assert s.encoding_path.exists()
+        assert s.encoding_bytes > 0
+        header, _ = read_spectralz_v4(s.encoding_path)
         assert header.version == 4
 
 
 def test_generate_corpus_is_reproducible_with_seed(tmp_path: Path) -> None:
-    a_dir = tmp_path / "run_a"
-    b_dir = tmp_path / "run_b"
-    generate_corpus(n_games=3, max_plies=10, seed=42, output_dir=a_dir)
-    generate_corpus(n_games=3, max_plies=10, seed=42, output_dir=b_dir)
-    for i in range(1, 4):
-        a = (a_dir / f"game_{i:03d}.spectralz").read_bytes()
-        b = (b_dir / f"game_{i:03d}.spectralz").read_bytes()
-        assert a == b
+    # Fixed run_id so manifest.generated_utc doesn't spuriously differ;
+    # c4d / NDJSON / spectralz are the bytes we actually care about.
+    ra = generate_corpus(
+        n_games=3, max_plies=10, seed=42, output_dir=tmp_path / "a", run_id="fixed"
+    )
+    rb = generate_corpus(
+        n_games=3, max_plies=10, seed=42, output_dir=tmp_path / "b", run_id="fixed"
+    )
+    for sa, sb in zip(ra.games, rb.games):
+        assert sa.encoding_path is not None
+        assert sb.encoding_path is not None
+        assert sa.encoding_path.read_bytes() == sb.encoding_path.read_bytes()
+        assert sa.c4d_path.read_bytes() == sb.c4d_path.read_bytes()
+        assert sa.ndjson_path.read_bytes() == sb.ndjson_path.read_bytes()
