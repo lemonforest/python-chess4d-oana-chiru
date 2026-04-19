@@ -29,6 +29,13 @@ chess4d-corpus-gen = "chess4d.corpus:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.metadata]
+# The [spectral] extra pins chess-spectral to a git+https URL (a PEP 508
+# "direct reference"). Hatchling rejects those by default as a safety
+# measure; this opt-in is required to accept the spectralz-v4 encoder's
+# mlehaptics-subdir install source.
+allow-direct-references = true
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/chess4d"]
 
