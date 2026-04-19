@@ -183,13 +183,24 @@ def write_spectralz(
     path: str | Path,
     start: GameState,
     moves: Iterable[Move4D],
+    *,
+    base_ply: int = 0,
 ) -> int:
     """Encode a game and write it as a spectralz v4 file. Returns bytes written.
 
-    The first frame is the ply-0 initial state with a zero-move
-    sentinel; subsequent frames carry the applied move's geometry and
-    flags. ``moves`` is consumed eagerly so the writer can report
-    ``n_plies`` in the header before streaming frames.
+    The first frame is the ``start`` state with a zero-move sentinel;
+    subsequent frames carry each applied move's geometry and flags.
+    ``moves`` is consumed eagerly so the writer can report ``n_plies``
+    in the header before streaming frames.
+
+    ``base_ply`` offsets the ``Frame4D.ply`` values written to disk —
+    the default of ``0`` keeps the legacy behavior where the first
+    frame is labeled ply 0. Set ``base_ply`` to the absolute ply index
+    of ``start`` when writing a tail-encoded file (e.g. pass
+    ``base_ply=470`` when ``start`` is the state at absolute ply 470 of
+    a longer game). The sidecar JSON written by
+    :mod:`chess4d.corpus` carries the full move list, so analysis
+    tooling can join the two via absolute ``ply`` numbers.
     """
     move_list = list(moves)
     frames: list[Frame4D] = []
@@ -199,7 +210,7 @@ def write_spectralz(
         frames.append(
             Frame4D(
                 encoding=encoding,
-                ply=ply,
+                ply=base_ply + ply,
                 from_sq=from_c,
                 to_sq=to_c,
                 promo=promo,
