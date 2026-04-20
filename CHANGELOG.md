@@ -11,13 +11,16 @@ Packaging-only release: the project is now installable from PyPI.
 
 ### Changed
 
-- `[spectral]` extra now depends on `chess-spectral>=1.1.1` from PyPI
+- `[spectral]` extra now depends on `chess-spectral>=1.1.3` from PyPI
   instead of the PEP 508 direct reference
   `chess-spectral @ git+https://github.com/.../mlehaptics.git@chess-spectral-v1.1.1#subdirectory=...`.
   PyPI rejects uploads whose metadata contains direct references, so
-  the prior form blocked distribution. Same content pinned at the
-  same lower bound; the spectralz-v4 bit-level encoding contract is
-  preserved. No user-visible API change.
+  the prior form blocked distribution. `1.1.3` is the first (and
+  currently only) PyPI release — `1.1.1` and `1.1.2` were internal
+  packaging iterations before the upload landed — so the minimum
+  bound tracks what downstream can actually resolve. The spectralz-v4
+  bit-level encoding contract is preserved; `tests/test_spectral.py`
+  passes unchanged under the new version.
 - `[tool.hatch.metadata] allow-direct-references` removed as a
   consequence — no longer needed without the git+https URL.
 
