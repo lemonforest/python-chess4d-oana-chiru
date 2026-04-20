@@ -125,3 +125,25 @@ jobs:
           else
             gh release create "$TAG" --title "$TAG" --notes "Auto-tagged by CI on push to main."
           fi
+
+      - name: Dispatch publish-to-pypi workflow
+        # Tags pushed with the default ``GITHUB_TOKEN`` do NOT cascade
+        # a ``push: tags`` trigger on other workflows — this is a
+        # documented GitHub Actions safety rail. ``workflow_dispatch``
+        # is explicitly exempt from that restriction, so we call it
+        # directly here. ``publish-to-pypi.yml`` also listens on
+        # ``push: tags`` for human-initiated tag pushes.
+        if: steps.ver.outputs.skip == 'false' && steps.exists.outputs.exists == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          if [ -f .github/workflows/publish-to-pypi.yml ]; then
+            gh workflow run publish-to-pypi.yml \
+              --ref "$TAG" \
+              --field "tag=$TAG"
+            echo "Dispatched publish-to-pypi.yml at ref $TAG"
+          else
+            echo "::notice::publish-to-pypi.yml not present; skipping PyPI dispatch."
+          fi
