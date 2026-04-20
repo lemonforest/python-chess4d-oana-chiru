@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] — 2026-04-20
+
+Ships the 0.3.1 release content to PyPI. No engine / API code changes
+from 0.3.1 — this is a CI + docs release.
+
+### Fixed
+
+- `.github/workflows/autotag.yml`: `maybe-tag` job now has
+  `actions: write` in its `permissions:` block. Without this,
+  `gh workflow run publish-to-pypi.yml ...` fails with
+  `HTTP 403: Resource not accessible by integration` because the
+  dispatches endpoint (`POST /actions/workflows/*/dispatches`)
+  requires that scope. The 0.3.1 release hit this: the git tag
+  and GitHub Release landed fine, but the publish workflow was
+  never dispatched and nothing made it to PyPI.
+
+### Changed
+
+- `README.md` now has an `## Install` section with the PyPI one-liner
+  (`pip install python-chess4d-oana-chiru`) plus the `[spectral]`
+  extra. The Spectral encoding section no longer claims
+  `chess-spectral` is pulled "directly from GitHub" — it comes from
+  PyPI now (0.3.1 made that transition). Status line updated to
+  0.3.2. Added PyPI / Python-versions / license badges at the top.
+
 ## [0.3.1] — 2026-04-19
 
 Packaging-only release: the project is now installable from PyPI.
