@@ -28,6 +28,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write  # needed to push tags + create releases
+      actions: write   # needed for ``gh workflow run`` to dispatch
+                       # publish-to-pypi.yml (POST /actions/workflows/*/
+                       # dispatches requires this scope; default
+                       # GITHUB_TOKEN without it fails 403 on the
+                       # cascade step — see v0.3.1 post-mortem).
     steps:
       - name: Checkout with full history
         uses: actions/checkout@v4
