@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] — 2026-04-19
+
+Packaging-only release: the project is now installable from PyPI.
+
+### Changed
+
+- `[spectral]` extra now depends on `chess-spectral>=1.1.1` from PyPI
+  instead of the PEP 508 direct reference
+  `chess-spectral @ git+https://github.com/.../mlehaptics.git@chess-spectral-v1.1.1#subdirectory=...`.
+  PyPI rejects uploads whose metadata contains direct references, so
+  the prior form blocked distribution. Same content pinned at the
+  same lower bound; the spectralz-v4 bit-level encoding contract is
+  preserved. No user-visible API change.
+- `[tool.hatch.metadata] allow-direct-references` removed as a
+  consequence — no longer needed without the git+https URL.
+
+### Added
+
+- `src/chess4d/py.typed` marker — downstream users' mypy now sees
+  the engine's type hints without extra configuration (PEP 561).
+- PyPI metadata polish in `pyproject.toml`: `keywords`, `classifiers`
+  (SemVer-stable Trove set: Science/Research, Board Games, Typed,
+  Python 3.11/3.12), and `project.urls` (Homepage, Issues, Changelog,
+  Paper).
+- Explicit `[tool.hatch.build.targets.sdist] include = [...]`
+  allowlist so the uploaded tarball only carries source + user-facing
+  docs (no `.claude/`, `smoke/`, `hoodoos/`, `benches/`, `CLAUDE.md`).
+- `.github/workflows/publish-to-pypi.yml`: OIDC trusted-publishing
+  workflow that builds sdist + wheel, runs `twine check --strict`,
+  and publishes to PyPI via the `pypi` environment. Triggered by
+  `push: tags: ["v*"]`, by `workflow_dispatch`, or by autotag.yml's
+  cascade dispatch (see below).
+- `.github/workflows/autotag.yml`: after a successful tag push, now
+  dispatches `publish-to-pypi.yml` via `gh workflow run`. This is
+  necessary because `GITHUB_TOKEN`-initiated tag pushes do not
+  cascade a `push: tags` trigger on other workflows —
+  `workflow_dispatch` is the documented exemption.
+
 ## [0.3.0] — 2026-04-19
 
 Two-pass corpus flow with NDJSON as the bridge between the playout
