@@ -130,6 +130,37 @@ chess4d-corpus-gen --n-games 10 --seed 42 --no-encode
 chess4d-corpus-gen --n-games 10 --seed 42 --run-id fixed-corpus-v1
 ```
 
+### Seeding semantics
+
+`--seed N` seeds a **single `random.Random(N)`** instance that is
+**shared across every game in the run**. The only thing that RNG drives
+is the move choice (`rng.choice(legal_moves)`); the starting position
+is always the canonical Oana-Chiru §3.3 layout and is *not* seeded.
+
+Because the RNG is deterministic, a corpus produced with a given
+`(max_plies, seed)` is actually an **infinite deterministic sequence**
+of games, and `--n-games N` just asks for the first *N* of them. That
+gives you this prefix property:
+
+| Run A | Run B | Overlap |
+|---|---|---|
+| `--n-games 10 --seed 42` | `--n-games 5 --seed 42` | Games 1..5 are byte-identical |
+| `--n-games 3 --seed 42` | `--n-games 100 --seed 42` | Games 1..3 are byte-identical |
+| `--n-games 10 --seed 42` | `--n-games 10 --seed 43` | Share nothing; different stream |
+
+So growing or shrinking `--n-games` *extends* the corpus forward or
+*truncates* it — it never changes earlier games. The same is true of
+all three outputs (`c4d`, `ndjson`, `spectralz`).
+
+What the shared-RNG design **doesn't** give you is the ability to
+reproduce game *i* in isolation: to get game 5's exact moves you have
+to run games 1..4 first, because game 5's starting RNG state is "seed
+42, advanced past the draws games 1..4 consumed." Per-game seed
+derivation (so each game's RNG is derived independently from the base
+seed + game index) is deliberately deferred to a future release — the
+corpus-level seed is enough for the full-corpus replay use case, which
+is what the `fetch_params.seed` field in `manifest.json` records.
+
 ### Retro-encoding an existing corpus
 
 Because encoding reads from the NDJSON sidecar, you can turn a
