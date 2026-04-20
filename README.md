@@ -1,11 +1,39 @@
 # python-chess4d-oana-chiru
 
+[![PyPI](https://img.shields.io/pypi/v/python-chess4d-oana-chiru.svg)](https://pypi.org/project/python-chess4d-oana-chiru/)
+[![Python versions](https://img.shields.io/pypi/pyversions/python-chess4d-oana-chiru.svg)](https://pypi.org/project/python-chess4d-oana-chiru/)
+[![License: Unlicense](https://img.shields.io/badge/license-Unlicense-blue.svg)](LICENSE)
+
 Python reference implementation of:
 
 > Oana & Chiru, *A Mathematical Framework for Four-Dimensional Chess*,
 > MDPI AppliedMath **6**(3):48, 2026. DOI [10.3390/appliedmath6030048](https://doi.org/10.3390/appliedmath6030048).
 
 The source paper lives in `hoodoos/` (treat as read-only reference).
+
+## Install
+
+From [PyPI](https://pypi.org/project/python-chess4d-oana-chiru/) (recommended):
+
+```bash
+# Core engine + corpus CLI (.c4d + NDJSON outputs; no encoder).
+pip install python-chess4d-oana-chiru
+
+# With the chess-spectral encoder pulled in (45 056-dim float32
+# vectors + spectralz v4 frame format; brings numpy/scipy along).
+pip install "python-chess4d-oana-chiru[spectral]"
+```
+
+From source (for local development):
+
+```bash
+git clone https://github.com/lemonforest/python-chess4d-oana-chiru
+cd python-chess4d-oana-chiru
+pip install -e ".[dev,spectral]"
+```
+
+Type hints ship with the package (`py.typed` marker per PEP 561) and are
+checked with `mypy --strict` in CI.
 
 ## Coordinate convention
 
@@ -17,7 +45,7 @@ also 0-based; the central mixed-color slice block is at theoretical
 
 ## Status
 
-0.3.0 — core engine, legality, and corpus tooling are in. Implemented:
+0.3.2 — core engine, legality, and corpus tooling are in. Implemented:
 all six piece types with paper-faithful move generation (rook / bishop /
 knight / queen / king / pawn), multi-king legality per §3.4 Def 3
 (a move is legal iff *no* king of the mover is attacked afterwards),
@@ -33,15 +61,17 @@ opening books. See `CLAUDE.md` for architectural invariants.
 
 ## Spectral encoding (optional)
 
-chess4d integrates with the `chess-spectral` framework (developed in the
-sibling `mlehaptics` repo) for physics-grounded analysis of 4D positions.
-The encoder maps a `GameState` to an 11-channel, 45 056-dimensional
-float32 spectral vector and writes streams of frames as `spectralz` v4
-files. Install with the `spectral` extra (pulls `chess-spectral` directly
-from GitHub, plus numpy and scipy):
+chess4d integrates with the
+[`chess-spectral`](https://pypi.org/project/chess-spectral/) framework
+(developed in the sibling `mlehaptics` repo, published to PyPI) for
+physics-grounded analysis of 4D positions. The encoder maps a
+`GameState` to an 11-channel, 45 056-dimensional float32 spectral
+vector and writes streams of frames as `spectralz` v4 files. Install
+the `spectral` extra to pull in `chess-spectral` (brings numpy + scipy
+along transitively):
 
 ```bash
-pip install -e .[spectral]
+pip install "python-chess4d-oana-chiru[spectral]"
 ```
 
 Encode a single position:
