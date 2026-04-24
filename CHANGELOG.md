@@ -8,12 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.3.3] — 2026-04-23
 
 **Correctness release — picks up the upstream D₄×Z₂ B1/B2
-character-table fix in `chess-spectral` 1.2.2. Users doing
-downstream research on 4D encodings produced by chess4d ≤ 0.3.2
-should consider those encodings suspect and re-run against
-0.3.3.**
+character-table fix in `chess-spectral`. Users doing downstream
+research on 4D encodings produced by chess4d ≤ 0.3.2 should
+consider those encodings suspect and re-run against 0.3.3.**
 
-### Fixed (via upstream `chess-spectral` 1.2.2)
+### Fixed (via upstream `chess-spectral`)
 
 - **D₄×Z₂ irrep projector characters.** `chess-spectral` ≤ 1.1.3
   carried a `B1`/`B2` character table of
@@ -27,7 +26,7 @@ should consider those encodings suspect and re-run against
   4D encoding were wrong. Verified upstream via direct
   conjugation: `g1 · g4 · g1⁻¹ = g5`, `g1 · g6 · g1⁻¹ = g7`.
 
-  Corrected tables (now in `chess-spectral` ≥ 1.2.2):
+  Corrected tables (landed in `chess-spectral` 1.2.2):
   - `B1 = [1, −1, 1, −1, +1, +1, −1, −1]`  (+1 on axis, −1 on diagonals)
   - `B2 = [1, −1, 1, −1, −1, −1, +1, +1]`  (−1 on axis, +1 on diagonals)
 
@@ -36,28 +35,29 @@ should consider those encodings suspect and re-run against
   our `chess4d.spectral` module is a thin adapter over
   `encode_4d(pos4)` / `write_spectralz_v4(...)`. So no python code
   in this repo changed; the fix flows in as a dependency bump.
-  Corresponding values-level difference: `encode_position(gs)`
-  and every `spectralz` file written by 0.3.3 are numerically
-  different from 0.3.2 for identical input positions, but the
-  determinism / round-trip / reproducibility-under-seed guarantees
-  our tests anchor on still hold.
+  Values-level impact: `encode_position(gs)` and every `spectralz`
+  file written by 0.3.3 are numerically different from 0.3.2 for
+  identical input positions, but the determinism / round-trip /
+  reproducibility-under-seed guarantees our tests anchor on still
+  hold (18/18 spectral tests pass under `chess-spectral` 1.2.3
+  without code changes).
 
 ### Changed
 
 - `[spectral]` extra: `chess-spectral>=1.1.3` →
-  `chess-spectral[corpus]>=1.2.2`. The `[corpus]` extra is a
-  **temporary workaround** — `chess-spectral` 1.2.2's
-  `__init__.py` eagerly imports `phase_operators.occupation_field`,
-  which does an unconditional `import chess` (the `python-chess`
-  2D library). 4D-only users hit
-  `ModuleNotFoundError: No module named 'chess'` on
-  `import chess_spectral` unless `python-chess` is present. The
-  `[corpus]` extra is upstream's sanctioned way to pull
-  `python-chess` as a transitive dep. When a future
-  `chess-spectral` release makes that import lazy, we'll drop
-  `[corpus]` from the line and the comment in `pyproject.toml`
-  explains the expected cleanup. Net cost to downstream: one extra
-  transitive wheel (`python-chess`, ≈2 MB) for now.
+  `chess-spectral>=1.2.3`. Covers **two** upstream changes landing
+  at once:
+
+  1. The B1/B2 character-table fix above (from 1.2.2).
+  2. A lazy-import fix (from 1.2.3) for
+     `phase_operators.occupation_field`, which `chess-spectral`
+     1.2.2's `__init__.py` eagerly imported — and which
+     unconditionally did `import chess` (the `python-chess` 2D
+     library). That regression meant 4D-only consumers briefly had
+     to pull `python-chess` transitively. 1.2.3 defers that import
+     until it's actually needed, so chess4d's `[spectral]` extra
+     now installs cleanly without `python-chess`. Pinning directly
+     at `>=1.2.3` lets us skip the `[corpus]` workaround entirely.
 
 ### Notes for research users
 
