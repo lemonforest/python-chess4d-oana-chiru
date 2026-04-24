@@ -1,6 +1,6 @@
 [project]
 name = "python-chess4d-oana-chiru"
-version = "0.3.2"
+version = "0.3.3"
 description = "Python reference implementation of Oana & Chiru (2026) — A Mathematical Framework for Four-Dimensional Chess (DOI 10.3390/appliedmath6030048)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -46,12 +46,19 @@ dev = [
 ]
 spectral = [
     # chess-spectral — 45 056-dim 4D encoder + spectralz v4 frame format.
-    # Published to PyPI as ``chess-spectral``; 1.1.3 is the first (and
-    # currently only) PyPI release — the 1.1.1 and 1.1.2 iterations were
-    # internal packaging fixes before upload. Pinned at the current
-    # released lower bound so downstream resolves to a real PyPI version
-    # rather than hitting a "no matching distribution" error.
-    "chess-spectral>=1.1.3",
+    # Pinned at ``>=1.2.3`` to pick up two upstream changes at once:
+    #
+    # 1. The D₄×Z₂ B1/B2 character-table correctness fix (landed in
+    #    1.2.2) — the bug that broke projector idempotence and
+    #    corrupted the B1/B2 channel contributions of the
+    #    45 056-dim 4D encoding. See CHANGELOG [0.3.3].
+    # 2. The lazy-import fix for ``phase_operators.occupation_field``
+    #    (landed in 1.2.3) — 1.2.2's ``chess_spectral/__init__.py``
+    #    eagerly imported that module, which unconditionally did
+    #    ``import chess`` (python-chess 2D library). 1.2.3 defers the
+    #    import until it's actually needed, so 4D-only consumers no
+    #    longer pay for a ``python-chess`` transitive dep.
+    "chess-spectral>=1.2.3",
 ]
 
 [project.scripts]
