@@ -5,6 +5,79 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] — 2026-04-23
+
+**Correctness release — picks up the upstream D₄×Z₂ B1/B2
+character-table fix in `chess-spectral` 1.2.2. Users doing
+downstream research on 4D encodings produced by chess4d ≤ 0.3.2
+should consider those encodings suspect and re-run against
+0.3.3.**
+
+### Fixed (via upstream `chess-spectral` 1.2.2)
+
+- **D₄×Z₂ irrep projector characters.** `chess-spectral` ≤ 1.1.3
+  carried a `B1`/`B2` character table of
+  `[1, −1, 1, −1, 1, −1, 1, −1]`, inherited from an old chess
+  convention whose axis-vs-diagonal ordering was swapped relative
+  to the D₄ element numbering used by the encoder. That pattern
+  treated `g4` and `g5` (axis reflections, **same conjugacy
+  class**) as opposite-signed — characters must be constant on
+  conjugacy classes, so the projector was **not idempotent** and
+  the B1/B2-channel contributions to the 45 056-dimensional
+  4D encoding were wrong. Verified upstream via direct
+  conjugation: `g1 · g4 · g1⁻¹ = g5`, `g1 · g6 · g1⁻¹ = g7`.
+
+  Corrected tables (now in `chess-spectral` ≥ 1.2.2):
+  - `B1 = [1, −1, 1, −1, +1, +1, −1, −1]`  (+1 on axis, −1 on diagonals)
+  - `B2 = [1, −1, 1, −1, −1, −1, +1, +1]`  (−1 on axis, +1 on diagonals)
+
+  chess4d itself never implemented any of this math — the D₄×Z₂
+  projectors live entirely inside `chess_spectral.encoder_4d` and
+  our `chess4d.spectral` module is a thin adapter over
+  `encode_4d(pos4)` / `write_spectralz_v4(...)`. So no python code
+  in this repo changed; the fix flows in as a dependency bump.
+  Corresponding values-level difference: `encode_position(gs)`
+  and every `spectralz` file written by 0.3.3 are numerically
+  different from 0.3.2 for identical input positions, but the
+  determinism / round-trip / reproducibility-under-seed guarantees
+  our tests anchor on still hold.
+
+### Changed
+
+- `[spectral]` extra: `chess-spectral>=1.1.3` →
+  `chess-spectral[corpus]>=1.2.2`. The `[corpus]` extra is a
+  **temporary workaround** — `chess-spectral` 1.2.2's
+  `__init__.py` eagerly imports `phase_operators.occupation_field`,
+  which does an unconditional `import chess` (the `python-chess`
+  2D library). 4D-only users hit
+  `ModuleNotFoundError: No module named 'chess'` on
+  `import chess_spectral` unless `python-chess` is present. The
+  `[corpus]` extra is upstream's sanctioned way to pull
+  `python-chess` as a transitive dep. When a future
+  `chess-spectral` release makes that import lazy, we'll drop
+  `[corpus]` from the line and the comment in `pyproject.toml`
+  explains the expected cleanup. Net cost to downstream: one extra
+  transitive wheel (`python-chess`, ≈2 MB) for now.
+
+### Notes for research users
+
+If you have `.spectralz` files or downstream analysis derived
+from chess4d 0.3.0 – 0.3.2, the per-position 45 056-dim vectors
+they carry reflect the buggy B1/B2 projectors and shouldn't be
+mixed with 0.3.3-generated data. Re-encode the source games to
+produce a refreshed corpus:
+
+```bash
+pip install --upgrade "python-chess4d-oana-chiru[spectral]"
+# For NDJSON-based corpora, retro-encode in place:
+chess4d-corpus-encode ./corpus/<run_id>
+```
+
+`chess4d-corpus-encode` reads the NDJSON sidecar and rewrites
+the `spectralz/` files (and `manifest.json`) in place, so you
+don't need to replay games. `c4d` and NDJSON sidecars are
+unaffected by the projector fix.
+
 ## [0.3.2] — 2026-04-20
 
 Ships the 0.3.1 release content to PyPI. No engine / API code changes

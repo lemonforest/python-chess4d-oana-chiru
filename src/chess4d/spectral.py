@@ -32,11 +32,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Iterable, Iterator, Union
 
 try:
-    from chess_spectral.encoder_4d import (  # type: ignore[import-untyped]
+    # chess-spectral ≥ 1.2.2 ships a ``py.typed`` marker; the
+    # ``# type: ignore[import-untyped]`` comments the earlier pin
+    # needed are now rejected by mypy as unused, so they're gone.
+    from chess_spectral.encoder_4d import (
         ENCODING_DIM_4D,
         encode_4d,
     )
-    from chess_spectral.frame_4d import (  # type: ignore[import-untyped]
+    from chess_spectral.frame_4d import (
         Frame4D,
         read_spectralz_v4,
         write_spectralz_v4,
