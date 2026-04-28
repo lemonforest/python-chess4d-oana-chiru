@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] — 2026-04-28
+
+Metadata-only patch release: advertise Python 3.13 and 3.14 support
+in the Trove classifiers. **No code changes.**
+
+### Changed
+
+- `pyproject.toml` `classifiers`: added
+  `"Programming Language :: Python :: 3.13"` and
+  `"Programming Language :: Python :: 3.14"`. The package itself is
+  pure-Python (`py3-none-any` wheel) and `requires-python = ">=3.11"`
+  already allowed both versions; this just teaches the PyPI project
+  page (and the README's `pyversions` shields.io badge) what we
+  actually support. End-to-end install verified on a fresh Python
+  3.14 venv — closure resolves to `chess-spectral 1.3.2 (cp314)`,
+  `numpy`, `scipy`, no `python-chess`, and `encode_position(
+  initial_position())` produces the expected `(45056,) float32`
+  with 21 030 nonzero entries.
+
 ## [0.4.0] — 2026-04-27
 
 **Native (C) encoder support.** chess4d can now route corpus

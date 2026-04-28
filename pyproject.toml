@@ -1,6 +1,6 @@
 [project]
 name = "python-chess4d-oana-chiru"
-version = "0.4.0"
+version = "0.4.1"
 description = "Python reference implementation of Oana & Chiru (2026) — A Mathematical Framework for Four-Dimensional Chess (DOI 10.3390/appliedmath6030048)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -23,6 +23,8 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Programming Language :: Python :: 3 :: Only",
     "Topic :: Games/Entertainment :: Board Games",
     "Topic :: Scientific/Engineering",
