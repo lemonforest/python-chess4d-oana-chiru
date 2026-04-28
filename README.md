@@ -45,7 +45,8 @@ also 0-based; the central mixed-color slice block is at theoretical
 
 ## Status
 
-0.3.2 — core engine, legality, and corpus tooling are in. Implemented:
+0.4.0 — core engine, legality, corpus tooling, and native (C)
+spectralz encoder integration are all in. Implemented:
 all six piece types with paper-faithful move generation (rook / bishop /
 knight / queen / king / pawn), multi-king legality per §3.4 Def 3
 (a move is legal iff *no* king of the mover is attacked afterwards),
@@ -129,6 +130,40 @@ chess4d-corpus-gen --n-games 10 --seed 42 --no-encode
 # reproducible named run
 chess4d-corpus-gen --n-games 10 --seed 42 --run-id fixed-corpus-v1
 ```
+
+### Encoder selection
+
+`--encoder` picks the spectralz encoder backend:
+
+| Mode | Behavior |
+|---|---|
+| `auto` (default) | Use the bundled C `spectral_4d` binary if `chess-spectral` ships one for your platform; otherwise fall back to the Python `encode_4d` adapter. |
+| `native` | Require the C binary; raise if it's not bundled in the installed `chess-spectral` (e.g. `py3-none-any` fallback wheel). |
+| `python` | Force the pure-Python encoder. Used to keep deterministic-bit-pattern reproducibility against legacy reference output. |
+
+The two backends agree to within float32 precision. The Python path
+emits ~`2^-55` accumulation noise in the A_1 channel that the C path
+zeros out — max abs diff `≈ 2.78e-17`, ten orders of magnitude below
+float32 epsilon. Channels 1–10 are bit-identical between the two.
+
+```bash
+# auto (uses the C binary on supported platforms — recommended)
+chess4d-corpus-gen --n-games 10 --seed 42
+
+# explicit native (raise if no binary)
+chess4d-corpus-gen --n-games 10 --seed 42 --encoder native
+
+# force Python (for byte-identical reproducibility against pre-0.4.0 reference)
+chess4d-corpus-gen --n-games 10 --seed 42 --encoder python
+```
+
+### Move-operator selection
+
+`--move-operator` controls how legal moves are generated during
+random playout. `spatial` (default) uses chess4d's existing
+geometric engine. `phase` is reserved for a future PR that will
+route through `chess_spectral.phase_operators_4d`'s phase-space
+move kernels — selecting it today raises `NotImplementedError`.
 
 ### Seeding semantics
 

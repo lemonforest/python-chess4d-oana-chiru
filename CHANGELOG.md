@@ -5,64 +5,93 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.4] — 2026-04-26
+## [0.4.0] — 2026-04-27
 
-Patch release: pulls in `chess-spectral` 1.3.0 ("no more stubs"
-release). No code changes in chess4d; this is a dependency-pin bump.
+**Native (C) encoder support.** chess4d can now route corpus
+spectralz encoding through the bundled `spectral_4d` C binary that
+ships inside `chess-spectral`'s platform wheels at
+`chess_spectral/_native/spectral_4d{.exe?}`. Materially faster on
+big corpora, with output that agrees to within float32 precision
+with the Python `encode_4d` reference path.
+
+### Added
+
+- `chess4d.native_encoder` module:
+  - `locate_native_binary() -> Path | None` — discovers the bundled
+    `spectral_4d` binary (or returns `None` when running under the
+    `py3-none-any` fallback wheel / when `chess-spectral` isn't
+    installed).
+  - `pos4_to_fen4(pos4) -> str` — serializes a chess4d pos4 dict
+    into a FEN4 v1 placement literal that round-trips through
+    `chess_spectral.fen_4d.parse`.
+  - `encode_ndjson_via_native(src, dst, *, last_n=None,
+    binary=None) -> (pivot, encoded_plies, nbytes)` — replays a
+    chess4d-ndjson-v1 file, translates it to upstream NDJSON4,
+    invokes the C binary, and returns the same triple as the
+    Python path.
+  - `NativeEncoderError` / `NativeEncoderUnavailable` exception
+    types for binary-failure / binary-missing cases.
+- `use_native: bool | None` kwarg on
+  `chess4d.corpus.encode_ndjson_to_spectralz`,
+  `chess4d.corpus.encode_existing_run`, and
+  `chess4d.corpus.generate_corpus`. `None` (default) auto-detects;
+  `True` requires the binary; `False` forces the Python path.
+- `--encoder {auto,python,native}` CLI flag on both
+  `chess4d-corpus-gen` and `chess4d-corpus-encode`.
+- `--move-operator {spatial,phase}` CLI flag on
+  `chess4d-corpus-gen`. `spatial` (default) uses chess4d's existing
+  geometric legal-move generator; `phase` is reserved for a future
+  PR that routes through `chess_spectral.phase_operators_4d`. The
+  flag exists today so the `--help` surface is stable, but
+  selecting `phase` raises `NotImplementedError`.
 
 ### Changed
 
-- `[spectral]` extra: `chess-spectral>=1.2.3` → `chess-spectral>=1.3.0`.
-  1.3.0 lands two upstream additions:
-  1. Bulk-encode entry points on the C `spectral_4d` binary
-     (`encode`, `encode-fen4`, `csv`) — previously stubbed pending
-     phase 5. We don't shell out to the C binary today
-     (`chess4d.spectral` uses the Python `encode_4d` adapter), but
-     with stubs gone, a future PR can wire up
-     `--encoder-bin scripts/binaries/spectral_4d.exe` for faster
-     corpus regeneration. See `scripts/binaries/README.md`.
-  2. 4D phase operators (multi-move-preview kernels). Not surfaced
-     through `encode_4d` / `write_spectralz_v4` — the only two API
-     points `chess4d.spectral` touches — so chess4d's externally
-     observable behavior is unchanged. Mentioned here for future
-     reference if we ever want to expose preview-style analyses.
+- `[spectral]` extra: `chess-spectral>=1.2.3` →
+  `chess-spectral>=1.3.2`. 1.3.1 added per-platform wheels with the
+  bundled `spectral_4d` binary (and full CPython 3.11–3.14
+  coverage); 1.3.2 fixes a 2048-byte FEN4 line-buffer overflow in
+  the C bulk `encode` path that previously made the binary unusable
+  for chess4d's 9 KB initial-position FEN4 strings (896 pieces vs
+  2D's 32). The carry-forward fixes from 1.2.2 (B1/B2
+  character-table) and 1.2.3 (lazy-import) remain in effect.
 
-### Verified
+### Parity story
 
-- `tests/test_spectral.py`: 18/18 pass under `chess-spectral 1.3.0`
-  (39 s, notably faster than prior 1.2.x runs).
-- `mypy --strict src/chess4d`: clean.
-- `ruff check src tests scripts`: clean.
-- `python -m build` + `twine check --strict`: PASSED on sdist + wheel.
-- Fresh Python 3.12 venv `pip install
-  "python-chess4d-oana-chiru[spectral]"`: closure is exactly
-  `chess-spectral 1.3.0 + numpy + scipy + chess4d`. `python-chess`
-  confirmed absent (1.2.3 lazy-import fix carries forward).
-  `encode_position(initial_position())` returns the expected
-  `(45056,) float32` with 21 030 nonzero entries.
-- End-to-end smoke: `chess4d-corpus-gen --n-games 1 --max-plies 8
-  --encode-last 5 --seed 0`, then delete the spectralz file and
-  `encode_main` retro-encode on the resulting NDJSON. Both paths
-  produce 1 081 684 bytes with the same `[3, 4, 5, 6, 7, 8]`
-  absolute ply numbering.
-- **`encode_4d` parity**: re-encoded one of the original issue #7
-  game NDJSONs (40 frames + initial state) under chess-spectral
-  1.3.0 and compared frame-by-frame against the existing 1.2.3
-  reference: **41/41 frames bit-identical** (`np.array_equal`
-  on the full 45 056-dim float32 vector, all frames). For the 4D
-  position class chess4d generates, 1.3.0's `encode_4d` is
-  numerically equivalent to 1.2.3.
+Python `encode_4d` and the native `spectral_4d encode` path produce
+spectralz output that **agrees to within float32 precision but is
+not bit-identical**. The Python encoder accumulates floating-point
+noise in the A_1 channel (channel 0) — values around `±2^-55` show
+up where the C path produces clean `0.0`. Max absolute difference
+observed: `≈2.78e-17` (ten orders of magnitude below float32
+epsilon `≈1.19e-7`). 2 400 of 45 056 dims affected per frame, all
+in channel 0, all numerically zero.
+
+Practical guidance:
+- For research that operates on encoder magnitudes / norms / cosines
+  / channel energies, the difference is undetectable at any
+  reasonable precision.
+- If you need bit-identical reproducibility against an existing
+  reference corpus, use `--encoder python` or pass
+  `use_native=False`.
+- The native path is the recommended default for new work — same
+  numerical content, materially faster, no cleanup of accumulation
+  noise needed at downstream consumer sites.
 
 ### Notes for research users
 
-`encode_4d` output for the chess4d 4D position class is unchanged
-across `chess-spectral` 1.2.3 → 1.3.0 (verified by frame-level
-`np.array_equal`). **Spectralz files generated by chess4d 0.3.0–0.3.3
-do not need to be re-encoded against 0.3.4.** The upgrade is a
-hygiene step: it pulls in upstream's now-implemented bulk-encode
-entry points (which we don't shell out to today but are useful
-infrastructure for future PRs), and it brings 4D phase operators
-into the package (also unused by `chess4d.spectral` today).
+`encode_4d` Python output is unchanged across all `chess-spectral`
+1.2.3 → 1.3.2 versions for the chess4d position class — frame-level
+`np.array_equal` confirms bit identity. Spectralz files generated
+by chess4d 0.3.0–0.3.3 (Python encoder) do not need to be
+re-encoded against 0.4.0 unless you opt into the native backend
+(in which case the difference is at the noise floor described
+above).
+
+The native backend is opt-in via the resolver: by default `auto`
+mode picks native if the C binary is present, but you can pin to
+the Python path with `--encoder python` to keep cross-version
+byte-identity for strict reproducibility runs.
 
 ## [0.3.3] — 2026-04-23
 

@@ -538,6 +538,7 @@ def encode_ndjson_to_spectralz(
     spectralz_path: str | Path,
     *,
     last_n: Optional[int] = None,
+    use_native: Optional[bool] = None,
 ) -> tuple[int, int, int]:
     """NDJSON → spectralz adapter. Returns ``(pivot, encoded_plies, nbytes)``.
 
@@ -551,13 +552,41 @@ def encode_ndjson_to_spectralz(
     so they line up with the NDJSON and c4d sidecars. ``last_n=None``
     encodes the entire game.
 
+    ``use_native`` selects between the pure-Python and the bundled C
+    encoder paths:
+
+    * ``None`` (default) — auto-detect: use the C ``spectral_4d``
+      binary if it's available in ``chess_spectral._native``, fall
+      back to Python ``encode_4d`` if not. The C path is materially
+      faster on big corpora; the two paths agree to within float32
+      precision (the Python path emits tiny ``2^-55`` denormals in
+      the A_1 channel from accumulation noise, the C path zeros them
+      out — differences ≈ 1e-17, ten orders of magnitude below
+      float32 epsilon).
+    * ``True`` — require the C binary; raise
+      :class:`chess4d.native_encoder.NativeEncoderUnavailable` if
+      none is found (e.g. on the ``py3-none-any`` fallback wheel).
+    * ``False`` — force the pure-Python path even when a C binary is
+      installed. Useful for deterministic-bit-pattern reproducibility
+      against the legacy reference output.
+
     Because the NDJSON carries all the information the encoder needs —
     the full move list plus ``is_castling`` / ``is_en_passant`` flags —
     this function is the canonical path for *retro-encoding* an
     existing ``--no-encode`` corpus (see :func:`encode_existing_run`).
-    Lazily imports :mod:`chess4d.spectral` so the NDJSON writer itself
-    remains usable on a bare install without the ``[spectral]`` extra.
+    Lazily imports :mod:`chess4d.spectral` and
+    :mod:`chess4d.native_encoder` so the NDJSON writer itself remains
+    usable on a bare install without the ``[spectral]`` extra.
     """
+    if use_native is None:
+        from chess4d.native_encoder import locate_native_binary
+        use_native = locate_native_binary() is not None
+    if use_native:
+        from chess4d.native_encoder import encode_ndjson_via_native
+        return encode_ndjson_via_native(
+            ndjson_path, spectralz_path, last_n=last_n
+        )
+
     from chess4d.spectral import write_spectralz  # lazy import
 
     start, moves, _ = read_ndjson_game(ndjson_path)
@@ -578,6 +607,7 @@ def _encode_one_game(
     spectralz_path: Path,
     *,
     encode_last: Optional[int],
+    use_native: Optional[bool] = None,
 ) -> tuple[int, int, int]:
     """Thin ``generate_corpus``-internal wrapper over the NDJSON path.
 
@@ -587,7 +617,7 @@ def _encode_one_game(
     public :func:`encode_ndjson_to_spectralz` signature.
     """
     return encode_ndjson_to_spectralz(
-        ndjson_path, spectralz_path, last_n=encode_last
+        ndjson_path, spectralz_path, last_n=encode_last, use_native=use_native
     )
 
 
@@ -603,6 +633,7 @@ def generate_corpus(
     encode: bool = True,
     encode_last: Optional[int] = None,
     run_id: Optional[str] = None,
+    use_native: Optional[bool] = None,
 ) -> CorpusResult:
     """Generate ``n_games`` random-playout games under a new run directory.
 
@@ -620,9 +651,21 @@ def generate_corpus(
 
     ``seed`` fully determines the random-playout output: two calls
     with the same ``(n_games, max_plies, seed)`` produce byte-identical
-    c4d, NDJSON, and spectralz files. When ``run_id`` is ``None`` a
-    fresh one is minted from the UTC clock (see :func:`_auto_run_id`),
-    so back-to-back runs land in distinct directories.
+    c4d and NDJSON files. Spectralz reproducibility depends on the
+    encoder choice — see ``use_native``.
+
+    ``use_native`` selects the spectralz encoder backend:
+
+    * ``None`` (default) — auto: native C binary if installed, else
+      Python ``encode_4d``.
+    * ``True`` — require the C binary; raise if absent.
+    * ``False`` — force Python encoder.
+
+    See :func:`encode_ndjson_to_spectralz` for the parity story.
+
+    When ``run_id`` is ``None`` a fresh one is minted from the UTC
+    clock (see :func:`_auto_run_id`), so back-to-back runs land in
+    distinct directories.
     """
     if not encode and encode_last is not None:
         raise ValueError(
@@ -673,7 +716,10 @@ def generate_corpus(
             # retro-encode command (see encode_existing_run) becomes
             # a pure second-pass over the same bytes.
             pivot, encoded_plies, encoding_bytes = _encode_one_game(
-                ndjson_path, encoding_path, encode_last=encode_last
+                ndjson_path,
+                encoding_path,
+                encode_last=encode_last,
+                use_native=use_native,
             )
         summaries.append(
             GameSummary(
@@ -739,6 +785,7 @@ def encode_existing_run(
     run_dir: str | Path,
     *,
     last_n: Optional[int] = None,
+    use_native: Optional[bool] = None,
 ) -> CorpusResult:
     """Retro-encode an existing ``--no-encode`` corpus; return fresh :class:`CorpusResult`.
 
@@ -757,13 +804,16 @@ def encode_existing_run(
        ``pivot_ply`` row reflects the new encoding,
     4. returns a :class:`CorpusResult` for the updated run.
 
-    Byte-identical equivalence: for a given (seed, last_n), a corpus
-    generated via ``generate_corpus(..., encode_last=N)`` and a corpus
-    generated via ``generate_corpus(..., encode=False)`` followed by
+    ``use_native`` selects the encoder backend (auto / native /
+    Python) — see :func:`encode_ndjson_to_spectralz` for semantics.
+
+    Within-backend reproducibility: for a given (seed, last_n,
+    backend), running ``generate_corpus(..., encode_last=N)`` and
+    ``generate_corpus(..., encode=False)`` followed by
     ``encode_existing_run(run_dir, last_n=N)`` produce the same
-    spectralz bytes — both paths ultimately call
-    :func:`chess4d.spectral.write_spectralz` with the same
-    ``(tail_start, tail_moves, base_ply)``.
+    spectralz bytes. Cross-backend (Python vs native) bytes match to
+    within float32 precision but differ in the A_1 channel by tiny
+    accumulation noise (~1e-17, well below float32 epsilon).
     """
     run_path = Path(run_dir)
     manifest_path = run_path / "manifest.json"
@@ -782,7 +832,10 @@ def encode_existing_run(
         ndjson_path = run_path / row["ndjson"]
         spectralz_path = spectralz_dir / f"{stem}.spectralz"
         pivot, encoded_plies, encoding_bytes = encode_ndjson_to_spectralz(
-            ndjson_path, spectralz_path, last_n=last_n
+            ndjson_path,
+            spectralz_path,
+            last_n=last_n,
+            use_native=use_native,
         )
         summaries.append(
             GameSummary(
@@ -889,6 +942,27 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip spectralz output entirely; emit only c4d and NDJSON.",
     )
+    parser.add_argument(
+        "--encoder",
+        choices=("auto", "python", "native"),
+        default="auto",
+        help="Spectralz encoder backend. ``auto`` (default) uses the "
+        "bundled C ``spectral_4d`` binary if installed via "
+        "chess-spectral, otherwise falls back to the Python encoder. "
+        "``native`` requires the C binary; ``python`` forces the pure-"
+        "Python path. The two paths agree to within float32 precision "
+        "(see CHANGELOG [0.4.0]).",
+    )
+    parser.add_argument(
+        "--move-operator",
+        choices=("spatial", "phase"),
+        default="spatial",
+        help="Random-playout move generator. ``spatial`` (default) "
+        "uses chess4d's geometric legal-move generator. ``phase`` "
+        "would route through chess_spectral.phase_operators_4d but "
+        "is not yet wired up — the flag is reserved here for the "
+        "follow-up PR. Selecting ``phase`` raises NotImplementedError.",
+    )
     return parser
 
 
@@ -896,6 +970,18 @@ def main(argv: Optional[list[str]] = None) -> int:
     """CLI entry point. Returns the process exit code."""
     parser = _build_parser()
     args = parser.parse_args(argv)
+    if args.move_operator == "phase":
+        raise NotImplementedError(
+            "--move-operator phase is reserved for a follow-up PR; "
+            "use --move-operator spatial (default) for now"
+        )
+    use_native: Optional[bool]
+    if args.encoder == "auto":
+        use_native = None
+    elif args.encoder == "python":
+        use_native = False
+    else:
+        use_native = True
     result = generate_corpus(
         n_games=args.n_games,
         max_plies=args.max_plies,
@@ -904,6 +990,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         encode=not args.no_encode,
         encode_last=args.encode_last,
         run_id=args.run_id,
+        use_native=use_native,
     )
     total_encoded_bytes = sum(s.encoding_bytes for s in result.games)
     total_plies = sum(s.plies for s in result.games)
@@ -939,6 +1026,13 @@ def _build_encode_parser() -> argparse.ArgumentParser:
         help="Encode only the final N plies per game; frames carry "
         "absolute ply numbers. Omit to encode the entire game.",
     )
+    parser.add_argument(
+        "--encoder",
+        choices=("auto", "python", "native"),
+        default="auto",
+        help="Spectralz encoder backend; same semantics as "
+        "``chess4d-corpus-gen --encoder``.",
+    )
     return parser
 
 
@@ -946,7 +1040,16 @@ def encode_main(argv: Optional[list[str]] = None) -> int:
     """CLI entry point for ``chess4d-corpus-encode``. Returns exit code."""
     parser = _build_encode_parser()
     args = parser.parse_args(argv)
-    result = encode_existing_run(args.run_dir, last_n=args.last_n)
+    use_native: Optional[bool]
+    if args.encoder == "auto":
+        use_native = None
+    elif args.encoder == "python":
+        use_native = False
+    else:
+        use_native = True
+    result = encode_existing_run(
+        args.run_dir, last_n=args.last_n, use_native=use_native
+    )
     total_encoded_bytes = sum(s.encoding_bytes for s in result.games)
     total_encoded_plies = sum(s.encoded_plies for s in result.games)
     print(

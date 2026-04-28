@@ -1,6 +1,6 @@
 [project]
 name = "python-chess4d-oana-chiru"
-version = "0.3.4"
+version = "0.4.0"
 description = "Python reference implementation of Oana & Chiru (2026) — A Mathematical Framework for Four-Dimensional Chess (DOI 10.3390/appliedmath6030048)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -46,14 +46,21 @@ dev = [
 ]
 spectral = [
     # chess-spectral — 45 056-dim 4D encoder + spectralz v4 frame format.
-    # Pinned at ``>=1.3.0`` to pick up the upstream "no more stubs"
-    # release: the bulk-encode entry points (``encode``, ``encode-fen4``,
-    # ``csv``) on the C ``spectral_4d`` binary are implemented as of
-    # 1.3.0 (previously stubbed pending phase 5). ``encode_4d`` Python
-    # output is unchanged for the position class chess4d generates —
-    # see CHANGELOG [0.3.4]. The B1/B2 character-table fix (1.2.2)
-    # and the lazy-import fix (1.2.3) carry forward.
-    "chess-spectral>=1.3.0",
+    # Pinned at ``>=1.3.2`` because:
+    #   * 1.3.1 platform wheels bundle the native ``spectral_4d`` C
+    #     binary at ``chess_spectral/_native/spectral_4d.exe`` (and
+    #     POSIX equivalents) — that's what our native-encoder path
+    #     discovers and shells out to.
+    #   * 1.3.2 fixes a 2048-byte FEN4 line-buffer bug in the C
+    #     binary's bulk ``encode`` command. 4D positions ship 9 KB
+    #     FEN4 strings (896 pieces vs 2D's 32), so 1.3.1 was unusable
+    #     for chess4d's bulk-encode path.
+    # Also: 1.3.1 was the first release with full CPython 3.11–3.14
+    # wheel coverage, and the B1/B2 character-table fix (1.2.2) and
+    # lazy-import fix (1.2.3) carry forward. The Python and native
+    # encoder paths agree to within float32 precision for the chess4d
+    # position class (max abs diff ~1e-17, see CHANGELOG [0.4.0]).
+    "chess-spectral>=1.3.2",
 ]
 
 [project.scripts]
