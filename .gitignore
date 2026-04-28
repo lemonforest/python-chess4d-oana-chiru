@@ -46,3 +46,14 @@ Thumbs.db
 
 # Session planning notes (not part of the project spec)
 hoodoos/brokenpaste.md
+
+# Native chess-spectral binaries dropped in for parity tests / future
+# faster corpus regeneration (see scripts/binaries/README.md). Not
+# checked in — each developer brings their own platform build. The
+# README itself is tracked so the channel layout / setup instructions
+# ship with the repo.
+scripts/binaries/*
+!scripts/binaries/README.md
+
+# Local corpora produced for issue / research re-runs.
+issue7_rerun/
