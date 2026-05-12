@@ -1,4 +1,4 @@
-"""Oana-Chiru starting position (paper §3.3).
+"""Rinaldi-Unciuleanu & Chiru starting position (paper §3.3).
 
 The initial position places 896 pieces across 64 ``(z, w)``-slices,
 partitioned into four classes:
@@ -133,7 +133,7 @@ def _initial_castling_rights() -> frozenset[CastlingRight]:
 
 
 def initial_position() -> GameState:
-    """Return the Oana-Chiru starting position with white to move.
+    """Return the Rinaldi-Unciuleanu & Chiru starting position with white to move.
 
     Populates the board with 896 pieces (448 per color, 28 kings per
     side) across the slice partition defined in :data:`CENTRAL_SLICES`,

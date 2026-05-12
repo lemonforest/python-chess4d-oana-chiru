@@ -12,7 +12,7 @@ Three public entry points::
     encode_game(start, moves)    -> iterator of (GameState, ndarray)
     write_spectralz(path, ...)   -> int bytes written, spectralz v4
 
-Pawn value convention follows the v1.1.1 Oana-Chiru schema documented
+Pawn value convention follows the v1.1.1 Rinaldi-Unciuleanu & Chiru schema documented
 on :func:`chess_spectral.encoder_4d.encode_4d`: pawns are emitted as
 ``(color_char, axis_char)`` tuples, never as bare single chars (the
 legacy form emits a ``DeprecationWarning`` and is avoided here).
@@ -92,9 +92,9 @@ def gamestate_to_pos4(gs: GameState) -> dict[int, PieceValue]:
     """Translate a :class:`GameState` into the encoder's ``pos4`` dict.
 
     Empty squares are omitted. Pawns are always emitted as
-    ``(color_char, axis_char)`` tuples per the v1.1.1 Oana-Chiru
-    schema; non-pawn pieces are single characters, uppercase for
-    White and lowercase for Black.
+    ``(color_char, axis_char)`` tuples per the v1.1.1
+    Rinaldi-Unciuleanu & Chiru schema; non-pawn pieces are single
+    characters, uppercase for White and lowercase for Black.
 
     Raises :class:`ValueError` for a pawn without a ``pawn_axis`` (the
     :class:`~chess4d.types.Piece` invariant should make this

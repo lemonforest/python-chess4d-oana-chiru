@@ -59,7 +59,7 @@ Schema docs
 * NDJSON schema id: ``"chess4d-ndjson-v1"`` on line 1.
 * Manifest top-level keys: ``generated_utc``, ``run_id``, ``source``,
   ``fetch_params``, ``tool_versions``, ``aggregates``, ``games``.
-* Per-ply pos4 dict uses the v1.1.1 Oana-Chiru schema — 2-char pawn
+* Per-ply pos4 dict uses the v1.1.1 Rinaldi-Unciuleanu & Chiru schema — 2-char pawn
   values (``Pw``/``Py``/``pw``/``py``) and 1-char non-pawns.
 
 The ``[spectral]`` extra is only required when encoding is enabled;
@@ -168,7 +168,7 @@ def play_random_game(
     Stops at checkmate, stalemate, or ``max_plies``. The engine's
     full legality pipeline (§3.4 Def 3) is honored on every ply via
     :meth:`GameState.legal_moves`, so the resulting move list is
-    always a valid Oana-Chiru game prefix.
+    always a valid Rinaldi-Unciuleanu & Chiru game prefix.
     """
     gs = initial_position()
     moves: list[Move4D] = []
@@ -208,7 +208,7 @@ def _pos4_compact(gs: GameState) -> dict[str, str]:
     """Serialize the occupied board into a JSON-safe pos4 dict.
 
     Keys are the linear square index (``str(int)``), values follow the
-    v1.1.1 Oana-Chiru schema:
+    v1.1.1 Rinaldi-Unciuleanu & Chiru schema:
 
     * Pawns are two characters — ``P``/``p`` (white/black) followed by
       ``y``/``w`` (forward axis).
@@ -341,7 +341,7 @@ def read_ndjson_game(
     """Parse a ``chess4d-ndjson-v1`` file; return ``(start, moves, headers)``.
 
     The inverse of :func:`write_ndjson_game`. Assumes the file was
-    written from the standard Oana-Chiru :func:`initial_position` — the
+    written from the standard Rinaldi-Unciuleanu & Chiru :func:`initial_position` — the
     ply-0 ``pos4`` snapshot is validated against that starting
     configuration, and a ``ValueError`` is raised if it doesn't match
     (so a file written from a mid-game snapshot by some future producer

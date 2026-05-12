@@ -1,8 +1,8 @@
-"""chess4d — Python reference implementation of Oana & Chiru (2026).
+"""chess4d — Python reference implementation of Rinaldi-Unciuleanu & Chiru (2026).
 
 Paper
 -----
-Oana & Chiru, *A Mathematical Framework for Four-Dimensional Chess*,
+Rinaldi-Unciuleanu & Chiru, *A Mathematical Framework for Four-Dimensional Chess*,
 MDPI AppliedMath 6(3):48, 2026. DOI 10.3390/appliedmath6030048.
 The source document lives at ``hoodoos/oana-chiru-2026.xml`` and is the
 authoritative spec for this package; section numbers referenced in
