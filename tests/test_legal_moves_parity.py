@@ -10,7 +10,7 @@ exercises:
 * check patterns (single-checker, discovered-check-via-pinned-mover),
 * double-check (only king moves legal),
 * heavily-pinned positions,
-* multi-king scenes (Oana-Chiru has 28 kings per side initially),
+* multi-king scenes (Rinaldi-Unciuleanu & Chiru has 28 kings per side initially),
 * the Phase 5 feature-interaction smoke fixtures.
 
 Only a set-equality comparison matters: both paths yield fully legal

@@ -205,7 +205,7 @@ def test_ndjson_pos4_initial_counts(tmp_path: Path) -> None:
     for v in pawns:
         assert v[0] in ("P", "p")
         assert v[1] in ("y", "w")
-    # Non-pawn chars are the Oana-Chiru set, uppercase == white.
+    # Non-pawn chars are the Rinaldi-Unciuleanu & Chiru set, uppercase == white.
     for v in nonpawns:
         assert v in ("K", "Q", "R", "B", "N", "k", "q", "r", "b", "n")
 
