@@ -1,6 +1,6 @@
 """Smoke example for the chess4d ⇄ chess-spectral adapter.
 
-Plays five random moves from the Oana-Chiru starting position, writes a
+Plays five random moves from the Rinaldi-Unciuleanu & Chiru starting position, writes a
 ``spectralz`` v4 file to ``hello.spectralz`` in the current directory,
 reads it back, and prints a one-line summary.
 

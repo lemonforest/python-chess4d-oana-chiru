@@ -8,7 +8,7 @@ Serialization formats for moves, positions, and games:
 * :mod:`chess4d.notation.json_format` — machine-readable JSON for
   tooling and interchange (Format B).
 
-Neither Oana & Chiru nor any other published 4D-chess implementation
+Neither Rinaldi-Unciuleanu & Chiru nor any other published 4D-chess implementation
 ships a notation format; these are the reference formats for Python
 tooling around the chess4d package.
 

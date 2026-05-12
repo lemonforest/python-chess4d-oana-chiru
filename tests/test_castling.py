@@ -1,6 +1,6 @@
 """Castling tests (paper §3.9 Def 10).
 
-Citations refer to Oana & Chiru, *A Mathematical Framework for
+Citations refer to Rinaldi-Unciuleanu & Chiru, *A Mathematical Framework for
 Four-Dimensional Chess*, MDPI AppliedMath 6(3):48, 2026
 (DOI 10.3390/appliedmath6030048).
 
@@ -8,7 +8,7 @@ Castling in 4D is restricted to the X-axis within a single ``(z, w)``
 -slice, but its *attack constraint is global*: every square the king
 traverses must be unattacked from any ``(z', w')`` slice. Rights-
 tracking follows standard chess, extended to 112 independent rights
-at the Oana-Chiru starting position (4+24 slices × 2 colors × 2 sides).
+at the Rinaldi-Unciuleanu & Chiru starting position (4+24 slices × 2 colors × 2 sides).
 """
 
 from __future__ import annotations

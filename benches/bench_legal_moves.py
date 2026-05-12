@@ -47,7 +47,7 @@ from chess4d import (
 
 
 def _initial_white() -> GameState:
-    """S1: the Oana-Chiru starting position; white to move."""
+    """S1: the Rinaldi-Unciuleanu & Chiru starting position; white to move."""
     return initial_position()
 
 

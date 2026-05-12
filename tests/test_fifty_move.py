@@ -1,6 +1,6 @@
 """Halfmove-clock / 50-move-rule tests.
 
-Citations refer to Oana & Chiru, *A Mathematical Framework for
+Citations refer to Rinaldi-Unciuleanu & Chiru, *A Mathematical Framework for
 Four-Dimensional Chess*, MDPI AppliedMath 6(3):48, 2026
 (DOI 10.3390/appliedmath6030048). The paper inherits FIDE's halfmove-
 clock semantics by reference.

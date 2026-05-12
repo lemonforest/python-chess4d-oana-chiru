@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This repo is **pre-implementation**. The working tree currently contains only:
 
 - `LICENSE` — Unlicense
-- `hoodoos/oana-chiru-2026.pdf` and `hoodoos/oana-chiru-2026.xml` — the source paper this project implements (Oana & Chiru, *A Mathematical Framework for Four-Dimensional Chess*, MDPI AppliedMath 6(3):48, 2026, DOI 10.3390/appliedmath6030048)
+- `hoodoos/oana-chiru-2026.pdf` and `hoodoos/oana-chiru-2026.xml` — the source paper this project implements (Rinaldi-Unciuleanu & Chiru, *A Mathematical Framework for Four-Dimensional Chess*, MDPI AppliedMath 6(3):48, 2026, DOI 10.3390/appliedmath6030048). The MDPI metadata records the first author's surname as "Oana" with given names "Rinaldi (Unciuleanu)"; the actual family name is Rinaldi-Unciuleanu and "Oana" is a given name, hence the citation form above. The legacy `oana-chiru` slug is preserved only in filenames, the PyPI/dist name, and the GitHub repo URL because renaming those would break already-published artifacts.
 
 There is no Python package, no dependency manifest, no tests, no CI, and no README. Build/lint/test commands do not yet exist — do not invent them. When starting the implementation, establish the packaging choice (e.g. `pyproject.toml` + `pytest`) and update this file.
 

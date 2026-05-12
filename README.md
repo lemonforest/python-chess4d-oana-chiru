@@ -6,10 +6,15 @@
 
 Python reference implementation of:
 
-> Oana & Chiru, *A Mathematical Framework for Four-Dimensional Chess*,
+> Rinaldi-Unciuleanu & Chiru, *A Mathematical Framework for Four-Dimensional Chess*,
 > MDPI AppliedMath **6**(3):48, 2026. DOI [10.3390/appliedmath6030048](https://doi.org/10.3390/appliedmath6030048).
 
-The source paper lives in `hoodoos/` (treat as read-only reference).
+The source paper lives in `hoodoos/` (treat as read-only reference). Note on
+naming: MDPI's metadata lists the first author's surname as "Oana" with given
+names "Rinaldi (Unciuleanu)", but the actual family name is Rinaldi-Unciuleanu;
+the `oana-chiru` slug survives in the PyPI/dist name, the GitHub repo URL, and
+a few paper-archive filenames because those are already published and cannot be
+renamed without breaking installs and external links.
 
 ## Install
 
@@ -57,8 +62,8 @@ notation with round-trip I/O, chess-spectral integration (optional),
 and a random-playout corpus generator writing the
 `chess-maths-the-movie` nested layout.
 
-Not yet implemented: search / evaluation, a UI, Oana-Chiru 4D-aware
-opening books. See `CLAUDE.md` for architectural invariants.
+Not yet implemented: search / evaluation, a UI, Rinaldi-Unciuleanu & Chiru
+4D-aware opening books. See `CLAUDE.md` for architectural invariants.
 
 ## Spectral encoding (optional)
 
@@ -94,7 +99,7 @@ write_spectralz("game.spectralz", start_state, move_list)
 ```
 
 The 11 channels cover the six piece types (with pawns split by forward
-axis per Oana & Chiru Def. 11) plus board-parity and side-to-move
+axis per Rinaldi-Unciuleanu & Chiru Def. 11) plus board-parity and side-to-move
 signals. See the `chess-spectral` notebooks in the mlehaptics repo for
 channel semantics and reconstruction examples.
 
@@ -170,7 +175,7 @@ move kernels — selecting it today raises `NotImplementedError`.
 `--seed N` seeds a **single `random.Random(N)`** instance that is
 **shared across every game in the run**. The only thing that RNG drives
 is the move choice (`rng.choice(legal_moves)`); the starting position
-is always the canonical Oana-Chiru §3.3 layout and is *not* seeded.
+is always the canonical Rinaldi-Unciuleanu & Chiru §3.3 layout and is *not* seeded.
 
 Because the RNG is deterministic, a corpus produced with a given
 `(max_plies, seed)` is actually an **infinite deterministic sequence**
